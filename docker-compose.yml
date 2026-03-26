@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:latest
+    container_name: esports_redis
+    ports:
+      - "6379:6379"
+    restart: always
+
+  mongodb:
+    image: mongo:latest
+    container_name: esports_mongo
+    ports:
+      - "27017:27017"
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    volumes:
+      - esports_mongo_data:/data/db
+    restart: always
+
+  cassandra:
+    image: cassandra:latest
+    container_name: esports_cassandra
+    ports:
+      - "9042:9042"
+    environment:
+      - CASSANDRA_CLUSTER_NAME=EsportCluster
+    volumes:
+      - esports_cassandra_data:/var/lib/cassandra
+    restart: always
+
+volumes:
+  esports_mongo_data:
+  esports_cassandra_data:

@@ -1,0 +1,17 @@
+
+.vs/
+*.user
+*.suo
+bin/
+obj/
+
+**/bin/
+**/obj/
+*.log
+
+docker-compose.override.yml
+
+node_modules/
+dist/
+npm-debug.log
+.env
