@@ -60,7 +60,7 @@ namespace EsportApi.Services
 
             // Ako nismo nasli nikog slicnog, vrati prvog igraca nazad u red da ceka dalje
             await _redisDb.ListLeftPushAsync("matchmaking_queue", p1Id);
-            return null;
+            return null; 
         }
 
         // --- LEADERBOARD (Redis Sorted Sets + Mongo) ---

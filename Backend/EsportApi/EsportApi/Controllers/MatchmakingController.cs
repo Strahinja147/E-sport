@@ -30,7 +30,7 @@ namespace EsportApi.Controllers
         {
             var match = await _matchService.TryMatch();
             return match != null ? Ok(match) : Ok("Still waiting for players...");
-        }
+        } 
 
         [HttpPost("report-win")]
         public async Task<IActionResult> Win(string userId)
