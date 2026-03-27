@@ -25,6 +25,9 @@ builder.Services.AddSingleton<Cassandra.ISession>(s => {
     return cluster.Connect();
 });
 
+// Registracija tvojih servisa (Clan 2)
+builder.Services.AddScoped<EsportApi.Services.IMatchmakingService, EsportApi.Services.MatchmakingService>();
+
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())
