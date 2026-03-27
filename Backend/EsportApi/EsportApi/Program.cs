@@ -1,4 +1,6 @@
 using Cassandra;
+using EsportApi.Services;
+using EsportApi.Services.Interfaces;
 using MongoDB.Driver;
 using StackExchange.Redis;
 
@@ -18,7 +20,10 @@ builder.Services.AddSingleton<IMongoClient>(s => {
     settings.DirectConnection = false; 
     return new MongoClient(settings);
 });
+builder.Services.AddScoped<IShopService, EsportApi.Services.ShopService>();
+builder.Services.AddScoped<IInventoryService, InventoryService>();
 builder.Services.AddSingleton<IConnectionMultiplexer>(s => ConnectionMultiplexer.Connect("127.0.0.1:6379"));
+
 
 builder.Services.AddSingleton<Cassandra.ISession>(s => {
     var cluster = Cluster.Builder().AddContactPoint("127.0.0.1").Build();
