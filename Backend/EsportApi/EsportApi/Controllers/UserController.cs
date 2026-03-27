@@ -31,6 +31,7 @@ namespace EsportApi.Controllers
                     Wins = 0,
                     Losses = 0,
                     TotalGames = 0,
+                    // WinRate ne pišeš ovde, on se sam računa u modelu!
                     LastGameAt = DateTime.UtcNow
                 }
             };
