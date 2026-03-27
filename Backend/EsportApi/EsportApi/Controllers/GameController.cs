@@ -1,4 +1,5 @@
-﻿using EsportApi.Services.Interfaces;
+﻿using EsportApi.Services;
+using EsportApi.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
 namespace EsportApi.Controllers
@@ -8,10 +9,12 @@ namespace EsportApi.Controllers
     public class GameController : ControllerBase
     {
         private readonly IGameService _gameService;
+        private readonly IMatchmakingService _matchmakingService;
 
-        public GameController(IGameService gameService)
+        public GameController(IGameService gameService, IMatchmakingService matchmakingService)
         {
             _gameService = gameService;
+            _matchmakingService = matchmakingService;
         }
 
         [HttpPost("start")]
@@ -29,11 +32,20 @@ namespace EsportApi.Controllers
             return Ok(game);
         }
 
+        // U GameController.cs neka doda IMatchmakingService u konstruktor
         [HttpPost("move")]
         public async Task<IActionResult> Move(string matchId, string playerId, int position, string symbol, int version)
         {
             var result = await _gameService.MakeMoveAsync(matchId, playerId, position, symbol, version);
+
             if (result.StartsWith("Greska")) return BadRequest(new { Message = result });
+
+            // Ako rezultat vraća "Kraj! Pobednik...", dodajemo pobedu u leaderboard!
+            if (result.Contains("Pobednik"))
+            {
+                await _matchmakingService.AddWin(playerId);
+            }
+
             return Ok(new { Message = result });
         }
     }

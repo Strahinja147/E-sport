@@ -1,6 +1,7 @@
 using StackExchange.Redis;
 using MongoDB.Driver;
 using EsportApi.Models;
+using EsportApi.Services.Interfaces;
 
 namespace EsportApi.Services
 {
@@ -8,15 +9,17 @@ namespace EsportApi.Services
     {
         private readonly IDatabase _redisDb;
         private readonly IMongoCollection<UserProfile> _userCollection;
+        private readonly IGameService _gameService; // <-- DODATO
 
-        public MatchmakingService(IConnectionMultiplexer redis, IMongoClient mongoClient)
+        public MatchmakingService(IConnectionMultiplexer redis, IMongoClient mongoClient, IGameService gameService)
         {
             // Povezivanje na Redis
             _redisDb = redis.GetDatabase();
 
             // Povezivanje na MongoDB kolekciju
             var mongoDb = mongoClient.GetDatabase("EsportDb");
-            _userCollection = mongoDb.GetCollection<UserProfile>("UserProfiles");
+            _userCollection = mongoDb.GetCollection<UserProfile>("Users");
+            _gameService = gameService; // <-- DODATO
         }
 
         // --- MATCHMAKING (Redis Lists) ---
@@ -26,41 +29,53 @@ namespace EsportApi.Services
             await _redisDb.ListRightPushAsync("matchmaking_queue", userId);
         }
 
-        public async Task<string?> TryMatch()
+        public async Task<MatchFoundDto?> TryMatch()
         {
-            // 1. Uzmi prvog igraca iz reda (Redis lista)
             var p1Id = await _redisDb.ListLeftPopAsync("matchmaking_queue");
             if (!p1Id.HasValue) return null;
 
-            // 2. Procitaj njegov EloRating iz MONGODB-a
             var p1Profile = await _userCollection.Find(u => u.Id == p1Id.ToString()).FirstOrDefaultAsync();
-            int p1Elo = p1Profile?.EloRating ?? 1000;
 
-            // 3. Pogledaj ostale ljude u redu (uzmi prvih 10 radi brzine)
+            // 1. ODBRANA OD "DUHOVA": Ako Player 1 ne postoji u Mongu, 
+            // ignorisemo ga (vec smo ga izbacili iz Redisa sa Pop) i prekidamo.
+            if (p1Profile == null) return null;
+
+            int p1Elo = p1Profile.EloRating;
+
             var potentialOpponents = await _redisDb.ListRangeAsync("matchmaking_queue", 0, 9);
 
             foreach (var p2Value in potentialOpponents)
             {
                 string p2Id = p2Value.ToString();
-
-                // 4. Procitaj rejting potencijalnog protivnika iz MONGODB-a
                 var p2Profile = await _userCollection.Find(u => u.Id == p2Id).FirstOrDefaultAsync();
-                int p2Elo = p2Profile?.EloRating ?? 1000;
 
-                // 5. FER UPARIVANJE: Da li je razlika u rejtingu manja od 200?
+                // 2. ODBRANA: Ako potencijalni protivnik ne postoji u Mongu,
+                // brisemo ga iz Redis reda i prelazimo na sledeceg!
+                if (p2Profile == null)
+                {
+                    await _redisDb.ListRemoveAsync("matchmaking_queue", p2Id);
+                    continue;
+                }
+
+                int p2Elo = p2Profile.EloRating;
+
                 if (Math.Abs(p1Elo - p2Elo) <= 200)
                 {
-                    // Nasli smo fer protivnika! Izbaci ga iz reda u Redisu
                     await _redisDb.ListRemoveAsync("matchmaking_queue", p2Id);
 
-                    string matchId = Guid.NewGuid().ToString();
-                    return $"FER MEC KREIRAN! ID: {matchId} | {p1Profile.Username} ({p1Elo}) vs {p2Profile.Username} ({p2Elo})";
+                    string matchId = await _gameService.StartGameAsync(p1Id.ToString(), p2Id);
+
+                    return new MatchFoundDto
+                    {
+                        MatchId = matchId,
+                        Player1 = p1Profile.Username,
+                        Player2 = p2Profile.Username
+                    };
                 }
             }
 
-            // Ako nismo nasli nikog slicnog, vrati prvog igraca nazad u red da ceka dalje
-            await _redisDb.ListLeftPushAsync("matchmaking_queue", p1Id);
-            return null; 
+            await _redisDb.ListRightPushAsync("matchmaking_queue", p1Id);
+            return null;
         }
 
         // --- LEADERBOARD (Redis Sorted Sets + Mongo) ---

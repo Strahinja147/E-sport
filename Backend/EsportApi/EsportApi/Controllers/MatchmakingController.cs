@@ -29,8 +29,9 @@ namespace EsportApi.Controllers
         public async Task<IActionResult> Check()
         {
             var match = await _matchService.TryMatch();
-            return match != null ? Ok(match) : Ok("Still waiting for players...");
-        } 
+            // Sada Swagger vraca lep JSON ako se nadje mec!
+            return match != null ? Ok(match) : Ok(new { Message = "Still waiting for players..." });
+        }
 
         [HttpPost("report-win")]
         public async Task<IActionResult> Win(string userId)
@@ -50,7 +51,7 @@ namespace EsportApi.Controllers
         [HttpPost("seed-users")]
         public async Task<IActionResult> SeedUsers(string username)
         {
-            var collection = _mongoClient.GetDatabase("EsportDb").GetCollection<UserProfile>("UserProfiles");
+            var collection = _mongoClient.GetDatabase("EsportDb").GetCollection<UserProfile>("Users");
             var newUser = new UserProfile
             {
                 Id = MongoDB.Bson.ObjectId.GenerateNewId().ToString(),
