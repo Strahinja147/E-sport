@@ -1,5 +1,4 @@
-﻿using EsportApi.Services;
-using EsportApi.Services.Interfaces;
+﻿using EsportApi.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
 namespace EsportApi.Controllers
@@ -47,6 +46,13 @@ namespace EsportApi.Controllers
             }
 
             return Ok(new { Message = result });
+        }
+
+        [HttpPost("snapshot-leaderboard")]
+        public async Task<IActionResult> SnapshotLeaderboard()
+        {
+            await _gameService.SaveLeaderboardSnapshotAsync();
+            return Ok(new { Message = "Dnevni presek Leaderboard-a uspesno arhiviran u Cassandru!" });
         }
     }
 }

@@ -47,6 +47,14 @@ namespace EsportApi.Services
                     played_at timestamp,
                     result text
                 )");
+
+            _cassandra.Execute(@"
+                CREATE TABLE IF NOT EXISTS esports.leaderboard_snapshots (
+                    date date,
+                    score int,
+                    player_id text,
+                    PRIMARY KEY (date, score, player_id)
+                ) WITH CLUSTERING ORDER BY (score DESC, player_id ASC)");
         }
 
         public async Task<string> StartGameAsync(string player1Id, string player2Id)
@@ -175,6 +183,24 @@ namespace EsportApi.Services
                 ? Builders<UserProfile>.Update.Inc(u => u.Stats.Wins, 1).Inc(u => u.Stats.TotalGames, 1).Inc(u => u.EloRating, 25).Inc(u => u.Coins, 200)
                 : Builders<UserProfile>.Update.Inc(u => u.Stats.Losses, 1).Inc(u => u.Stats.TotalGames, 1).Inc(u => u.EloRating, -15);
             await users.UpdateOneAsync(filter, update);
+        }
+
+        public async Task SaveLeaderboardSnapshotAsync()
+        {
+            var db = _redis.GetDatabase();
+
+            // Vučemo top 10 igrača iz Redisa (Order.Descending da bi prvi bio najbolji)
+            var topPlayers = await db.SortedSetRangeByRankWithScoresAsync("leaderboard", 0, 9, Order.Descending);
+
+            // Pripremamo upit za Cassandru
+            var query = "INSERT INTO esports.leaderboard_snapshots (date, score, player_id) VALUES (toDate(now()), ?, ?)";
+            var prepared = await _cassandra.PrepareAsync(query);
+
+            foreach (var player in topPlayers)
+            {
+                // Upisujemo u Cassandru (Score mora biti int, PlayerId je string)
+                await _cassandra.ExecuteAsync(prepared.Bind((int)player.Score, player.Element.ToString()));
+            }
         }
     }
 }

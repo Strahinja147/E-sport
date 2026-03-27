@@ -32,9 +32,13 @@ builder.Services.AddSingleton<Cassandra.ISession>(s => {
 });
 
 // Registracija tvojih servisa (Clan 2)
-builder.Services.AddScoped<EsportApi.Services.IMatchmakingService, EsportApi.Services.MatchmakingService>();
+builder.Services.AddScoped<IMatchmakingService, EsportApi.Services.MatchmakingService>();
 
 builder.Services.AddSignalR();
+
+builder.Services.AddHostedService<EsportApi.Services.MatchmakingWorker>();
+
+builder.Services.AddHostedService<EsportApi.Services.LeaderboardSnapshotWorker>();
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())

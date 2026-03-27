@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
-using EsportApi.Services;
 using EsportApi.Models;
 using MongoDB.Driver;
+using EsportApi.Services.Interfaces;
 
 namespace EsportApi.Controllers
 {

@@ -1,6 +1,6 @@
 using EsportApi.Models;
 
-namespace EsportApi.Services
+namespace EsportApi.Services.Interfaces
 {
 
     // Mali DTO za povratnu informaciju
@@ -18,6 +18,6 @@ namespace EsportApi.Services
 
         // Leaderboard deo (Redis Sorted Sets + MongoDB)
         Task AddWin(string userId);
-        Task<List<EsportApi.Models.LeaderboardEntry>> GetTopPlayers(int count);
+        Task<List<LeaderboardEntry>> GetTopPlayers(int count);
     }
 }

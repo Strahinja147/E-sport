@@ -6,4 +6,6 @@ public interface IGameService
     Task<TicTacToeGame> GetGameStateAsync(string matchId);
     // Dodat parametar clientVersion
     Task<string> MakeMoveAsync(string matchId, string playerId, int position, string symbol, int clientVersion);
+
+    Task SaveLeaderboardSnapshotAsync();
 }
