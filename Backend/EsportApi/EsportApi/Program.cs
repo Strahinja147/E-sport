@@ -22,6 +22,7 @@ builder.Services.AddSingleton<IMongoClient>(s => {
 });
 builder.Services.AddScoped<IShopService, EsportApi.Services.ShopService>();
 builder.Services.AddScoped<IInventoryService, InventoryService>();
+builder.Services.AddScoped<IGameService, GameService>();
 builder.Services.AddSingleton<IConnectionMultiplexer>(s => ConnectionMultiplexer.Connect("127.0.0.1:6379"));
 
 
@@ -30,6 +31,7 @@ builder.Services.AddSingleton<Cassandra.ISession>(s => {
     return cluster.Connect();
 });
 
+builder.Services.AddSignalR();
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())
@@ -43,5 +45,7 @@ app.UseHttpsRedirection();
 app.UseAuthorization();
 
 app.MapControllers();
+
+app.MapHub<EsportApi.Hubs.GameHub>("/gamehub");
 
 app.Run();
