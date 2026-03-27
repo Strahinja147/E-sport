@@ -1,4 +1,6 @@
 using Cassandra;
+using EsportApi.Services;
+using EsportApi.Services.Interfaces;
 using MongoDB.Driver;
 using StackExchange.Redis;
 
@@ -18,7 +20,11 @@ builder.Services.AddSingleton<IMongoClient>(s => {
     settings.DirectConnection = false; 
     return new MongoClient(settings);
 });
+builder.Services.AddScoped<IShopService, EsportApi.Services.ShopService>();
+builder.Services.AddScoped<IInventoryService, InventoryService>();
+builder.Services.AddScoped<IGameService, GameService>();
 builder.Services.AddSingleton<IConnectionMultiplexer>(s => ConnectionMultiplexer.Connect("127.0.0.1:6379"));
+
 
 builder.Services.AddSingleton<Cassandra.ISession>(s => {
     var cluster = Cluster.Builder().AddContactPoint("127.0.0.1").Build();
@@ -28,6 +34,7 @@ builder.Services.AddSingleton<Cassandra.ISession>(s => {
 // Registracija tvojih servisa (Clan 2)
 builder.Services.AddScoped<EsportApi.Services.IMatchmakingService, EsportApi.Services.MatchmakingService>();
 
+builder.Services.AddSignalR();
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())
@@ -41,5 +48,7 @@ app.UseHttpsRedirection();
 app.UseAuthorization();
 
 app.MapControllers();
+
+app.MapHub<EsportApi.Hubs.GameHub>("/gamehub");
 
 app.Run();

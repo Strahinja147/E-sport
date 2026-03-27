@@ -1,10 +1,21 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="Services\Interfaces - Copy\**" />
+    <Compile Remove="Services\NewFolder1\**" />
+    <Content Remove="Services\Interfaces - Copy\**" />
+    <Content Remove="Services\NewFolder1\**" />
+    <EmbeddedResource Remove="Services\Interfaces - Copy\**" />
+    <EmbeddedResource Remove="Services\NewFolder1\**" />
+    <None Remove="Services\Interfaces - Copy\**" />
+    <None Remove="Services\NewFolder1\**" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="CassandraCSharpDriver" Version="3.22.0" />
