@@ -1,4 +1,5 @@
 using Cassandra;
+using EsportApi.Services;
 using MongoDB.Driver;
 using StackExchange.Redis;
 
@@ -11,6 +12,9 @@ builder.Services.AddControllers();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+//Za turnir/mongo
+builder.Services.AddScoped<ITournamentService, TournamentService>();
 
 builder.Services.AddSingleton<IMongoClient>(s => {
     
