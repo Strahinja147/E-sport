@@ -14,6 +14,9 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+//Za turnir/mongo
+builder.Services.AddScoped<ITournamentService, TournamentService>();
+
 builder.Services.AddSingleton<IMongoClient>(s => {
     
     var settings = MongoClientSettings.FromConnectionString("mongodb://127.0.0.1:27017/?replicaSet=rs0");

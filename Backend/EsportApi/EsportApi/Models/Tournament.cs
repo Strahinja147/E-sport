@@ -9,6 +9,7 @@ namespace EsportApi.Models
         [BsonRepresentation(BsonType.ObjectId)]
         public required string Id { get; set; }
         public required string Name { get; set; }
+        public string Status { get; set; } = "Not Started";
         public List<TournamentRound> Rounds { get; set; } = new();
     }
 
