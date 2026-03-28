@@ -3,6 +3,7 @@ using MongoDB.Driver;
 using MongoDB.Bson;
 using StackExchange.Redis;
 using System.Text.Json;
+using EsportApi.Models.DTOs;
 
 namespace EsportApi.Services
 {
@@ -10,7 +11,8 @@ namespace EsportApi.Services
     {
         private readonly IMongoClient _mongoClient;
         private readonly IMongoCollection<Tournament> _tournamentsCollection;
-        private readonly IMongoCollection<Match> _matchesCollection; // Dodali smo i mečeve!
+        private readonly IMongoCollection<Match> _matchesCollection;
+        private readonly IMongoCollection<UserProfile> _usersCollection;
         private readonly IDatabase _redisDb;
 
         public TournamentService(IMongoClient mongoClient, IConnectionMultiplexer redis)
@@ -21,6 +23,7 @@ namespace EsportApi.Services
             // Povezujemo se na dve kolekcije da bi radili transakciju nad obe
             _tournamentsCollection = db.GetCollection<Tournament>("Tournaments");
             _matchesCollection = db.GetCollection<Match>("Matches");
+            _usersCollection = db.GetCollection<UserProfile>("Users");
 
             _redisDb = redis.GetDatabase();
         }
@@ -185,6 +188,26 @@ namespace EsportApi.Services
                 throw new Exception("Broj igrača mora biti paran (npr. 2, 4, 8)!");
             }
 
+            var cleanedPlayerIds = playerIds.Select(id => id.Trim()).Distinct().ToList();
+
+            if (cleanedPlayerIds.Count != playerIds.Count)
+            {
+                throw new Exception("Greška: Prosledio si duple ID-jeve u Swaggeru!");
+            }
+
+            // 2. Tražimo ih u bazi
+            var filter = Builders<UserProfile>.Filter.In(u => u.Id, cleanedPlayerIds);
+            var existingUsers = await _usersCollection.Find(filter).ToListAsync();
+
+            // 3. Ako se brojevi ne poklapaju, tačno ispisujemo KOJI ID fali!
+            if (existingUsers.Count != cleanedPlayerIds.Count)
+            {
+                var pronadjeniIdjevi = existingUsers.Select(u => u.Id).ToList();
+                var faleU_Bazi = cleanedPlayerIds.Except(pronadjeniIdjevi).ToList();
+
+                throw new Exception($"Greška u bazi! Ovi ID-jevi ne postoje: {string.Join(", ", faleU_Bazi)}");
+            }
+
             using var session = await _mongoClient.StartSessionAsync();
             session.StartTransaction();
             try
@@ -236,6 +259,54 @@ namespace EsportApi.Services
                 Console.WriteLine($"Greska pri pravljenju zreba: {ex.Message}");
                 return false;
             }
+        }
+
+        public async Task<TournamentDetailsDto?> GetTournamentWithDetails(string tournamentId)
+        {
+            // 1. Nadji turnir
+            var tournament = await _tournamentsCollection.Find(t => t.Id == tournamentId).FirstOrDefaultAsync();
+            if (tournament == null) return null;
+
+            // 2. Skupi sve ID-jeve mečeva iz svih rundi i povuci ih iz baze OĐEDNOM
+            var allMatchIds = tournament.Rounds.SelectMany(r => r.MatchIds).ToList();
+            var matches = await _matchesCollection.Find(m => allMatchIds.Contains(m.Id)).ToListAsync();
+
+            // 3. Skupi sve ID-jeve igrača iz tih mečeva (Player1, Player2, Winner) i povuci ih ODJEDNOM
+            var userIds = matches.Select(m => m.Player1Id)
+                .Union(matches.Select(m => m.Player2Id))
+                .Union(matches.Select(m => m.WinnerId))
+                .Where(id => id != null && id != "TBD") // Ignorisi TBD
+                .Distinct()
+                .ToList();
+
+            var users = await _usersCollection.Find(u => userIds.Contains(u.Id)).ToListAsync();
+
+            // Pravimo "rečnik" (Dictionary) da bi C# brzo pronalazio igrača po ID-ju
+            var userDict = users.ToDictionary(u => u.Id, u => new PlayerDto { Id = u.Id, Username = u.Username });
+
+            // Dodajemo "TBD" (To Be Determined) kao lažnog igrača da bi frontend znao da se čeka
+            userDict["TBD"] = new PlayerDto { Id = "TBD", Username = "Čeka se protivnik..." };
+
+            // 4. MAPIRANJE (Stapamo sve u jedan lepi DTO objekat)
+            var result = new TournamentDetailsDto
+            {
+                Id = tournament.Id,
+                Name = tournament.Name,
+                Rounds = tournament.Rounds.Select(r => new TournamentRoundDto
+                {
+                    RoundNumber = r.RoundNumber,
+                    Matches = matches.Where(m => r.MatchIds.Contains(m.Id)).Select(m => new MatchDetailsDto
+                    {
+                        Id = m.Id,
+                        Status = m.Status,
+                        Player1 = m.Player1Id != null && userDict.ContainsKey(m.Player1Id) ? userDict[m.Player1Id] : null,
+                        Player2 = m.Player2Id != null && userDict.ContainsKey(m.Player2Id) ? userDict[m.Player2Id] : null,
+                        Winner = m.WinnerId != null && userDict.ContainsKey(m.WinnerId) ? userDict[m.WinnerId] : null
+                    }).ToList()
+                }).ToList()
+            };
+
+            return result;
         }
     }
 }

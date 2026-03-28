@@ -1,9 +1,6 @@
 using Cassandra;
 using EsportApi.Services;
-<<<<<<< HEAD
-=======
 using EsportApi.Services.Interfaces;
->>>>>>> main
 using MongoDB.Driver;
 using StackExchange.Redis;
 
