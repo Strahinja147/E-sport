@@ -33,44 +33,44 @@ namespace EsportApi.Services
 
         private void InitializeCassandraTables()
         {
+            // Kreiranje Keyspace-a
             _cassandra.Execute("CREATE KEYSPACE IF NOT EXISTS esports WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}");
 
-            // DODATO: duration_ms kolona za analitiku brzine igraca
-            _cassandra.Execute(@"
-                CREATE TABLE IF NOT EXISTS esports.moves (
-                    match_id text,
-                    timestamp timestamp,
-                    player_id text,
-                    position int,
-                    symbol text,
-                    duration_ms bigint,
-                    PRIMARY KEY (match_id, timestamp)
-                ) WITH CLUSTERING ORDER BY (timestamp ASC)");
+            // 1. Telemetrija poteza
+            _cassandra.Execute(@"CREATE TABLE IF NOT EXISTS esports.moves (
+        match_id text, timestamp timestamp, player_id text, position int, symbol text, duration_ms bigint,
+        PRIMARY KEY (match_id, timestamp)) WITH CLUSTERING ORDER BY (timestamp ASC)");
 
-            _cassandra.Execute(@"
-                CREATE TABLE IF NOT EXISTS esports.matches_history (
-                    match_id text PRIMARY KEY,
-                    played_at timestamp,
-                    result text
-                )");
+            // 2. Istorija mečeva
+            _cassandra.Execute("CREATE TABLE IF NOT EXISTS esports.matches_history (match_id text PRIMARY KEY, played_at timestamp, result text)");
 
-            _cassandra.Execute(@"
-                CREATE TABLE IF NOT EXISTS esports.leaderboard_snapshots (
-                    date date,
-                    score int,
-                    player_id text,
-                    PRIMARY KEY (date, score, player_id)
-                ) WITH CLUSTERING ORDER BY (score DESC, player_id ASC)");
+            // 3. Leaderboard Snapshots
+            _cassandra.Execute(@"CREATE TABLE IF NOT EXISTS esports.leaderboard_snapshots (
+        date date, score int, player_id text, PRIMARY KEY (date, score, player_id)) WITH CLUSTERING ORDER BY (score DESC, player_id ASC)");
 
-            _cassandra.Execute(@"
-                CREATE TABLE IF NOT EXISTS esports.player_progress_history (
-                    user_id text,
-                    timestamp timestamp,
-                    elo int,
-                    coins int,
-                    change_reason text,
-                    PRIMARY KEY (user_id, timestamp)
-                ) WITH CLUSTERING ORDER BY (timestamp DESC)");
+            // 4. Istorija napretka (ELO/Koini kroz vreme)
+            _cassandra.Execute(@"CREATE TABLE IF NOT EXISTS esports.player_progress_history (
+        user_id text, timestamp timestamp, elo int, coins int, change_reason text,
+        PRIMARY KEY (user_id, timestamp)) WITH CLUSTERING ORDER BY (timestamp DESC)");
+
+            // 5. Audit Log (Bezbednost logovanja)
+            _cassandra.Execute(@"CREATE TABLE IF NOT EXISTS esports.login_history (
+        user_id text, timestamp timestamp, ip_address text, device text,
+        PRIMARY KEY (user_id, timestamp)) WITH CLUSTERING ORDER BY (timestamp DESC)");
+
+            // 6. Finansijski logovi (Zarada po mesecima)
+            _cassandra.Execute(@"CREATE TABLE IF NOT EXISTS esports.purchase_logs (
+        year_month text, purchased_at timestamp, user_id text, item_id text, item_name text, price int,
+        PRIMARY KEY (year_month, purchased_at)) WITH CLUSTERING ORDER BY (purchased_at DESC)");
+
+            // 7. Inventar korisnika
+            _cassandra.Execute(@"CREATE TABLE IF NOT EXISTS esports.inventory (
+        user_id text, item_id text, item_name text, purchased_at timestamp,
+        PRIMARY KEY (user_id, purchased_at)) WITH CLUSTERING ORDER BY (purchased_at DESC)");
+
+            // 8. Istorija turnira
+            _cassandra.Execute(@"CREATE TABLE IF NOT EXISTS esports.tournament_history (
+        tournament_id text PRIMARY KEY, name text, completed_at timestamp, winner_id text)");
         }
 
         public async Task<string> StartGameAsync(string player1Id, string player2Id, string? matchId = null, string? tournamentId = null)
@@ -299,7 +299,6 @@ namespace EsportApi.Services
                 await _cassandra.ExecuteAsync(prepared.Bind((int)player.Score, player.Element.ToString()));
             }
         }
-
         public async Task<string> SaveChatMessageAsync(string matchId, string playerId, string message)
         {
             var db = _redis.GetDatabase();
@@ -340,5 +339,6 @@ namespace EsportApi.Services
             // Vraćamo ih kao listu stringova
             return messages.Select(m => m.ToString()).ToList();
         }
+
     }
 }

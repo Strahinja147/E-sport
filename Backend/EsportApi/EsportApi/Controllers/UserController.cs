@@ -1,7 +1,8 @@
-﻿using EsportApi.Services;
+﻿using Cassandra;
+using EsportApi.Services;
 using Microsoft.AspNetCore.Mvc;
 using MongoDB.Driver;
-using StackExchange.Redis; // DODATO
+using StackExchange.Redis;
 
 namespace EsportApi.Controllers
 {
@@ -11,26 +12,23 @@ namespace EsportApi.Controllers
     {
         private readonly IMongoCollection<UserProfile> _usersCollection;
         private readonly IGameService _gameService;
-        private readonly IDatabase _redisDb; // DODATO
+        private readonly Cassandra.ISession _cassandra;
+        private readonly IDatabase _redisDb;
 
-        // Ažuriran konstruktor
-        public UserController(IMongoClient mongoClient, IGameService gameService, IConnectionMultiplexer redis)
+        public UserController(IMongoClient mongoClient, IGameService gameService, Cassandra.ISession cassandra, IConnectionMultiplexer redis)
         {
             var database = mongoClient.GetDatabase("EsportDb");
             _usersCollection = database.GetCollection<UserProfile>("Users");
             _gameService = gameService;
-            _redisDb = redis.GetDatabase(); // DODATO
+            _redisDb = redis.GetDatabase();
+            _cassandra = cassandra;
         }
 
         [HttpPost("register")]
         public async Task<IActionResult> Register(string username)
         {
-            // Provera da li korisnik već postoji pre registracije (da nemamo dva Pere)
             var existingUser = await _usersCollection.Find(u => u.Username.ToLower() == username.ToLower()).FirstOrDefaultAsync();
-            if (existingUser != null)
-            {
-                return BadRequest("Korisnik sa tim imenom već postoji. Pokušaj da se uloguješ.");
-            }
+            if (existingUser != null) return BadRequest("Korisnik već postoji.");
 
             var newUser = new UserProfile
             {
@@ -38,23 +36,13 @@ namespace EsportApi.Controllers
                 Username = username,
                 EloRating = 1000,
                 Coins = 500,
-                Stats = new PlayerStatistics
-                {
-                    Wins = 0,
-                    Losses = 0,
-                    TotalGames = 0,
-                    WinRate = 0,
-                    LastGameAt = DateTime.UtcNow
-                }
+                Stats = new PlayerStatistics { Wins = 0, Losses = 0, TotalGames = 0, WinRate = 0, LastGameAt = DateTime.UtcNow }
             };
 
             await _usersCollection.InsertOneAsync(newUser);
             return Ok(newUser);
         }
 
-        // ==========================================
-        // NOVO: RUTA ZA LOGOVANJE I DOHVATANJE ID-ja
-        // ==========================================
         [HttpPost("login")]
         public async Task<IActionResult> Login(string username)
         {
@@ -68,11 +56,16 @@ namespace EsportApi.Controllers
                 return NotFound("Korisnik sa tim imenom ne postoji. Registruj se prvo.");
             }
 
-            // ==========================================
-            // NOVO: REDIS ONLINE PRESENCE (SADD)
-            // ==========================================
-            // Dodajemo igrača u Set online igrača
             await _redisDb.SetAddAsync("online_players", user.Id);
+
+            var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+            if (ip == "::1") ip = "127.0.0.1";
+
+            var device = Request.Headers["User-Agent"].ToString() ?? "Unknown Device";
+
+            var query = "INSERT INTO esports.login_history (user_id, timestamp, ip_address, device) VALUES (?, toTimestamp(now()), ?, ?)";
+            var prepared = await _cassandra.PrepareAsync(query);
+            await _cassandra.ExecuteAsync(prepared.Bind(user.Id, ip, device));
 
             return Ok(user);
         }
@@ -96,6 +89,21 @@ namespace EsportApi.Controllers
         }
 
 
+        [HttpGet("audit-logs/{userId}")]
+        public async Task<IActionResult> GetAuditLogs(string userId)
+        {
+            var query = "SELECT timestamp, ip_address, device FROM esports.login_history WHERE user_id = ?";
+            var prepared = await _cassandra.PrepareAsync(query);
+            var rows = await _cassandra.ExecuteAsync(prepared.Bind(userId));
+
+            var logs = rows.Select(r => new {
+                Time = r.GetValue<DateTimeOffset>("timestamp"),
+                IP = r.GetValue<string>("ip_address"),
+                Device = r.GetValue<string>("device")
+            }).ToList();
+
+            return Ok(logs);
+        }
 
         [HttpGet("all")]
         public async Task<IActionResult> GetAll()
@@ -107,7 +115,6 @@ namespace EsportApi.Controllers
         [HttpGet("progress/{userId}")]
         public async Task<IActionResult> GetPlayerProgress(string userId)
         {
-            // Koristimo GameService jer smo tamo stavili metodu (možeš je i premestiti)
             var history = await _gameService.GetPlayerProgressAsync(userId);
             return Ok(history);
         }
