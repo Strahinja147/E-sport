@@ -17,8 +17,9 @@ namespace EsportApi.Services
         private readonly IHubContext<GameHub> _hubContext;
         private readonly ITournamentService _tournamentService;
         private readonly IMongoCollection<Match> _matchesCollection;
+        private readonly ITeamService _teamService;
 
-        public GameService(IMongoClient mongo, IConnectionMultiplexer redis, Cassandra.ISession cassandra, IHubContext<GameHub> hubContext, ITournamentService tournamentService)
+        public GameService(IMongoClient mongo, IConnectionMultiplexer redis, Cassandra.ISession cassandra, IHubContext<GameHub> hubContext, ITournamentService tournamentService, ITeamService teamService)
         {
             _mongo = mongo;
             _redis = redis;
@@ -28,7 +29,7 @@ namespace EsportApi.Services
             var database = _mongo.GetDatabase("EsportDb");
             _matchesCollection = database.GetCollection<Match>("Matches");
             InitializeCassandraTables();
-            
+            _teamService = teamService;
         }
 
         private void InitializeCassandraTables()
@@ -249,6 +250,12 @@ namespace EsportApi.Services
                 .Set(u => u.Stats.LastGameAt, DateTime.UtcNow);
 
             await users.UpdateOneAsync(u => u.Id == userId, update);
+
+            if (!string.IsNullOrEmpty(user.CurrentTeamId))
+            {
+                await _teamService.RecalculateTeamElo(user.CurrentTeamId);
+                Console.WriteLine($"[TeamService] Osvezio sam ELO tima za klan {user.CurrentTeamId}");
+            }
 
             // 6. REDIS: Automatsko osvežavanje globalne rang liste (Sorted Set)
             var redisDb = _redis.GetDatabase();

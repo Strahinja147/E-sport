@@ -11,6 +11,7 @@ public class UserProfile
     public int Coins { get; set; } = 0;
     public PlayerStatistics Stats { get; set; } = new();
 
+    public string? CurrentTeamId { get; set; } 
     public List<Friend> Friends { get; set; } = new();
     /* 
        ZAŠTO: 
