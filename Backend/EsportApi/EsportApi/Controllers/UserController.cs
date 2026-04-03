@@ -1,6 +1,7 @@
 ﻿using EsportApi.Services;
 using Microsoft.AspNetCore.Mvc;
 using MongoDB.Driver;
+using StackExchange.Redis; // DODATO
 
 namespace EsportApi.Controllers
 {
@@ -10,12 +11,15 @@ namespace EsportApi.Controllers
     {
         private readonly IMongoCollection<UserProfile> _usersCollection;
         private readonly IGameService _gameService;
+        private readonly IDatabase _redisDb; // DODATO
 
-        public UserController(IMongoClient mongoClient, IGameService gameService)
+        // Ažuriran konstruktor
+        public UserController(IMongoClient mongoClient, IGameService gameService, IConnectionMultiplexer redis)
         {
             var database = mongoClient.GetDatabase("EsportDb");
             _usersCollection = database.GetCollection<UserProfile>("Users");
             _gameService = gameService;
+            _redisDb = redis.GetDatabase(); // DODATO
         }
 
         [HttpPost("register")]
@@ -57,7 +61,6 @@ namespace EsportApi.Controllers
             if (string.IsNullOrWhiteSpace(username))
                 return BadRequest("Korisničko ime je obavezno.");
 
-            // Tražimo korisnika u Mongo bazi (ignorišemo velika/mala slova radi lakšeg korišćenja)
             var user = await _usersCollection.Find(u => u.Username.ToLower() == username.ToLower()).FirstOrDefaultAsync();
 
             if (user == null)
@@ -65,9 +68,34 @@ namespace EsportApi.Controllers
                 return NotFound("Korisnik sa tim imenom ne postoji. Registruj se prvo.");
             }
 
-            // Vraćamo ceo profil korisnika. Frontend će odavde izvući 'id', 'eloRating', 'coins' itd.
+            // ==========================================
+            // NOVO: REDIS ONLINE PRESENCE (SADD)
+            // ==========================================
+            // Dodajemo igrača u Set online igrača
+            await _redisDb.SetAddAsync("online_players", user.Id);
+
             return Ok(user);
         }
+
+        // ==========================================
+        // NOVE RUTE ZA ONLINE STATUS
+        // ==========================================
+        [HttpPost("logout")]
+        public async Task<IActionResult> Logout(string userId)
+        {
+            // SREM: Brišemo igrača iz Seta
+            await _redisDb.SetRemoveAsync("online_players", userId);
+            return Ok("Izlogovan uspešno.");
+        }
+        [HttpGet("online-count")]
+        public async Task<IActionResult> GetOnlineCount()
+        {
+            // SCARD: Ultra-brza komanda koja vraća broj članova u Setu (O(1) kompleksnost)
+            var count = await _redisDb.SetLengthAsync("online_players");
+            return Ok(new { OnlinePlayers = count });
+        }
+
+
 
         [HttpGet("all")]
         public async Task<IActionResult> GetAll()

@@ -299,5 +299,46 @@ namespace EsportApi.Services
                 await _cassandra.ExecuteAsync(prepared.Bind((int)player.Score, player.Element.ToString()));
             }
         }
+
+        public async Task<string> SaveChatMessageAsync(string matchId, string playerId, string message)
+        {
+            var db = _redis.GetDatabase();
+
+            // 1. BEZBEDNOST: Proveravamo ko uopšte igra ovaj meč
+            var p1Id = await db.HashGetAsync($"match_players:{matchId}", "P1");
+            var p2Id = await db.HashGetAsync($"match_players:{matchId}", "P2");
+
+            // Ako meč ne postoji ili je igrač "uljez" -> odbijamo ga!
+            if (p1Id.IsNullOrEmpty || p2Id.IsNullOrEmpty) return null;
+            if (playerId != p1Id.ToString() && playerId != p2Id.ToString()) return null;
+
+            // 2. Ime vadimo direktno iz baze da igrač ne bi lažirao ime na frontendu
+            var user = await _mongo.GetDatabase("EsportDb").GetCollection<UserProfile>("Users")
+                                   .Find(u => u.Id == playerId).FirstOrDefaultAsync();
+
+            string username = user != null ? user.Username : "Unknown";
+
+            // 3. Upisujemo u Redis (LPUSH + LTRIM)
+            var chatKey = $"chat:{matchId}";
+            var chatMessage = $"{username}: {message}";
+
+            await db.ListLeftPushAsync(chatKey, chatMessage);
+            await db.ListTrimAsync(chatKey, 0, 9);
+            await db.KeyExpireAsync(chatKey, TimeSpan.FromMinutes(30));
+
+            // Vraćamo Username da bi SignalR znao ko je poslao poruku
+            return username;
+        }
+
+        public async Task<List<string>> GetChatHistoryAsync(string matchId)
+        {
+            var db = _redis.GetDatabase();
+
+            // Dohvatamo sve poruke iz liste (LRANGE 0 -1)
+            var messages = await db.ListRangeAsync($"chat:{matchId}");
+
+            // Vraćamo ih kao listu stringova
+            return messages.Select(m => m.ToString()).ToList();
+        }
     }
 }

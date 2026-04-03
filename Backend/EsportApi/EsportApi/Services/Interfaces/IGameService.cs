@@ -8,4 +8,11 @@ public interface IGameService
     Task<string> MakeMoveAsync(string matchId, string playerId, int position, string symbol, int clientVersion);
     Task<List<PlayerProgress>> GetPlayerProgressAsync(string userId);
     Task SaveLeaderboardSnapshotAsync();
+
+    // ==========================================
+    // NOVO: REDIS MATCH CHAT
+    // ==========================================
+    // U IGameService.cs promeni potpis metode:
+    Task<string> SaveChatMessageAsync(string matchId, string playerId, string message);
+    Task<List<string>> GetChatHistoryAsync(string matchId);
 }
