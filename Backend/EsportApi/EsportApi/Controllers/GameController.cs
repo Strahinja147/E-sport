@@ -31,6 +31,13 @@ namespace EsportApi.Controllers
             return Ok(game);
         }
 
+        [HttpGet("{matchId}/chat")]
+        public async Task<IActionResult> GetMatchChat(string matchId)
+        {
+            var chat = await _gameService.GetChatHistoryAsync(matchId);
+            return Ok(chat);
+        }
+
         // U GameController.cs neka doda IMatchmakingService u konstruktor
         [HttpPost("move")]
         public async Task<IActionResult> Move(string matchId, string playerId, int position, string symbol, int version)
@@ -49,6 +56,21 @@ namespace EsportApi.Controllers
         {
             await _gameService.SaveLeaderboardSnapshotAsync();
             return Ok(new { Message = "Dnevni presek Leaderboard-a uspesno arhiviran u Cassandru!" });
+        }
+
+
+        // SAMO ZA TESTIRANJE CHAT-A PREKO BACKA !!!!!!!!!!!!!!
+        // U GameController.cs promeni SendChatMessage rutu:
+        [HttpPost("{matchId}/chat")]
+        public async Task<IActionResult> SendChatMessage(string matchId, string playerId, string message)
+        {
+            var username = await _gameService.SaveChatMessageAsync(matchId, playerId, message);
+
+            // Ako je vratio null, znači da je Izbacivač proradio!
+            if (username == null)
+                return BadRequest("ZABRANJENO: Nisi učesnik ovog meča!");
+
+            return Ok($"Poruka od igrača {username} sačuvana u Redis!");
         }
     }
 }

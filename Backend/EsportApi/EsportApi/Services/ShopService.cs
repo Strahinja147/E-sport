@@ -1,5 +1,6 @@
 ﻿using Cassandra;
 using EsportApi.Models;
+using EsportApi.Models.DTOs;
 using EsportApi.Services.Interfaces;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -25,13 +26,11 @@ namespace EsportApi.Services
             var db = _redis.GetDatabase();
             var lockKey = $"lock:shop:{itemId}";
 
-            // 1. REDIS LOCK (Sprečava Race Condition)
             if (!await db.LockTakeAsync(lockKey, "shop_lock", TimeSpan.FromSeconds(10)))
                 return "Predmet se trenutno kupuje, pokušaj za trenutak.";
 
             try
             {
-                // 2. MONGO (Transakcija)
                 using var session = await _mongo.StartSessionAsync();
                 session.StartTransaction();
 
@@ -39,69 +38,92 @@ namespace EsportApi.Services
                 var shopItems = dbMongo.GetCollection<ShopItem>("ShopItems");
                 var users = dbMongo.GetCollection<UserProfile>("Users");
 
-                // Pronadji artikal (itemId je string koji odgovara ObjectId-ju u bazi)
                 var item = await shopItems.Find(session, i => i.Id == itemId).FirstOrDefaultAsync();
-                if (item == null)
-                {
-                    await session.AbortTransactionAsync();
-                    return "Predmet ne postoji.";
-                }
+                if (item == null) { await session.AbortTransactionAsync(); return "Predmet ne postoji."; }
 
-                // Pronadji korisnika (filter po string ID-ju)
                 var userFilter = Builders<UserProfile>.Filter.Eq(u => u.Id, userId);
                 var user = await users.Find(session, userFilter).FirstOrDefaultAsync();
 
                 if (user == null || user.Coins < item.Price)
                 {
                     await session.AbortTransactionAsync();
-                    return $"Nedovoljno novčića ili igrač ne postoji. (Ima: {user?.Coins ?? 0}, Cena: {item.Price})";
+                    return $"Nedovoljno novčića ili igrač ne postoji.";
                 }
 
-                // Skini pare (UpdateOne sa session-om i Filterom)
                 var update = Builders<UserProfile>.Update.Inc(u => u.Coins, -item.Price);
-                var result = await users.UpdateOneAsync(session, userFilter, update);
-
-                if (result.ModifiedCount == 0)
-                {
-                    await session.AbortTransactionAsync();
-                    return "Greška pri ažuriranju novčića u bazi.";
-                }
+                await users.UpdateOneAsync(session, userFilter, update);
 
                 await session.CommitTransactionAsync();
 
-                // 3. CASSANDRA (Zapisivanje inventara)
-                // Napomena: itemId je string (iz Mongo), konvertujemo u Guid za Cassandru
+                // --- CASSANDRA: INVENTAR (Za korisnika) ---
+                var invQuery = "INSERT INTO esports.inventory (user_id, item_id, item_name, purchased_at) VALUES (?, ?, ?, toTimestamp(now()))";
+                var stInv = await _cassandra.PrepareAsync(invQuery);
+                await _cassandra.ExecuteAsync(stInv.Bind(userId, itemId, item.Name));
 
-                var insertQuery = "INSERT INTO esports.inventory (user_id, item_id, item_name, purchased_at) VALUES (?, ?, ?, ?)";
-                var statement = await _cassandra.PrepareAsync(insertQuery);
-                await _cassandra.ExecuteAsync(statement.Bind(userId, itemId, item.Name, DateTime.UtcNow));
+                // --- CASSANDRA: FINANCIAL LOG (Za biznis izveštaje) ---
+                var yearMonth = DateTime.UtcNow.ToString("yyyy-MM");
+                var logQuery = "INSERT INTO esports.purchase_logs (year_month, purchased_at, user_id, item_id, item_name, price) VALUES (?, toTimestamp(now()), ?, ?, ?, ?)";
+                var stLog = await _cassandra.PrepareAsync(logQuery);
+                await _cassandra.ExecuteAsync(stLog.Bind(yearMonth, userId, itemId, item.Name, item.Price));
 
                 return "Uspešna kupovina!";
             }
-            catch (Exception ex)
+            catch (Exception ex) { return $"Greska: {ex.Message}"; }
+            finally { await db.LockReleaseAsync(lockKey, "shop_lock"); }
+        }
+
+        public async Task<MonthlyReportDto> GetMonthlyRevenueReportAsync(string yearMonth)
+        {
+            var query = "SELECT item_name, price FROM esports.purchase_logs WHERE year_month = ?";
+            var prepared = await _cassandra.PrepareAsync(query);
+            var rows = await _cassandra.ExecuteAsync(prepared.Bind(yearMonth));
+
+            int totalRevenue = 0;
+            var itemCounts = new Dictionary<string, int>();
+
+            foreach (var row in rows)
             {
-                return $"Greska: {ex.Message}";
+                int price = row.GetValue<int>("price");
+                string itemName = row.GetValue<string>("item_name");
+
+                // 1. Sabiramo ukupnu zaradu
+                totalRevenue += price;
+
+                // 2. Brojimo prodaju svakog artikla
+                if (itemCounts.ContainsKey(itemName))
+                    itemCounts[itemName]++;
+                else
+                    itemCounts[itemName] = 1;
             }
-            finally
+
+            // Pronalazimo artikal sa najvećim brojem prodaja
+            var bestSelling = itemCounts.OrderByDescending(x => x.Value).FirstOrDefault();
+
+            return new MonthlyReportDto
             {
-                await db.LockReleaseAsync(lockKey, "shop_lock");
-            }
+                Month = yearMonth,
+                TotalRevenue = totalRevenue,
+                BestSellingItem = bestSelling.Key ?? "Nema prodaje",
+                SalesCount = bestSelling.Value
+            };
+        }
+        public async Task<int> GetMonthlyRevenueAsync(string yearMonth)
+        {
+            var query = "SELECT price FROM esports.purchase_logs WHERE year_month = ?";
+            var prepared = await _cassandra.PrepareAsync(query);
+            var rows = await _cassandra.ExecuteAsync(prepared.Bind(yearMonth));
+            return rows.Sum(r => r.GetValue<int>("price"));
         }
 
         public async Task AddCoinsAsync(string userId, int amount)
         {
             var users = _mongo.GetDatabase("EsportDb").GetCollection<UserProfile>("Users");
-            var update = Builders<UserProfile>.Update.Inc(u => u.Coins, amount);
-            // Koristimo direktan filter da budemo sigurni
-            var filter = Builders<UserProfile>.Filter.Eq(u => u.Id, userId);
-            await users.UpdateOneAsync(filter, update);
+            await users.UpdateOneAsync(u => u.Id == userId, Builders<UserProfile>.Update.Inc(u => u.Coins, amount));
         }
+
         public async Task<List<ShopItem>> GetAllItemsAsync()
         {
-            var shopItems = _mongo.GetDatabase("EsportDb").GetCollection<ShopItem>("ShopItems");
-
-            // Asinhrono izvlačenje svih stavki iz kolekcije
-            return await shopItems.Find(_ => true).ToListAsync();
+            return await _mongo.GetDatabase("EsportDb").GetCollection<ShopItem>("ShopItems").Find(_ => true).ToListAsync();
         }
     }
 }
