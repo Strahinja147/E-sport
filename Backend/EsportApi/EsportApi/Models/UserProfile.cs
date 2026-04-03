@@ -11,6 +11,7 @@ public class UserProfile
     public int Coins { get; set; } = 0;
     public PlayerStatistics Stats { get; set; } = new();
 
+    public List<Friend> Friends { get; set; } = new();
     /* 
        ZAŠTO: 
        1. Ugnježdeni Stats: Umesto da PlayerStatistics bude posebna kolekcija, 
@@ -33,4 +34,12 @@ public class PlayerStatistics
     //[BsonElement("WinRate")]
     public double WinRate { get; set; }
     public DateTime LastGameAt { get; set; }
+}
+
+// NOVA KLASA ZA UGNJEŽDENI OBJEKAT PRIJATELJA
+public class Friend
+{
+    public required string UserId { get; set; }
+    public required string Username { get; set; }
+    public string Status { get; set; } = "Pending"; // Može biti "Pending" ili "Accepted"
 }
