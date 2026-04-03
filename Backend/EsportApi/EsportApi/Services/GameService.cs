@@ -339,5 +339,6 @@ namespace EsportApi.Services
             // Vraćamo ih kao listu stringova
             return messages.Select(m => m.ToString()).ToList();
         }
+
     }
 }

@@ -70,13 +70,24 @@ namespace EsportApi.Controllers
             return Ok(user);
         }
 
+        // ==========================================
+        // NOVE RUTE ZA ONLINE STATUS
+        // ==========================================
         [HttpPost("logout")]
         public async Task<IActionResult> Logout(string userId)
         {
+            // SREM: Brišemo igrača iz Seta
             await _redisDb.SetRemoveAsync("online_players", userId);
-
             return Ok("Izlogovan uspešno.");
         }
+        [HttpGet("online-count")]
+        public async Task<IActionResult> GetOnlineCount()
+        {
+            // SCARD: Ultra-brza komanda koja vraća broj članova u Setu (O(1) kompleksnost)
+            var count = await _redisDb.SetLengthAsync("online_players");
+            return Ok(new { OnlinePlayers = count });
+        }
+
 
         [HttpGet("audit-logs/{userId}")]
         public async Task<IActionResult> GetAuditLogs(string userId)
