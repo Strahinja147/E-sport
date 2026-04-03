@@ -17,7 +17,10 @@ namespace EsportApi.Services.Interfaces
         Task<MatchFoundDto?> TryMatch(); // <-- Promenjeno ovde
 
         // Leaderboard deo (Redis Sorted Sets + MongoDB)
-        Task AddWin(string userId);
         Task<List<LeaderboardEntry>> GetTopPlayers(int count);
+        Task UpdateLeaderboardCache(string userId, int newElo);
+        Task SyncLeaderboardAsync();
+        Task<string> JoinTournamentQueueAsync(string userId);
+        Task<List<string>?> CheckTournamentQueueAsync(int requiredPlayers);
     }
 }

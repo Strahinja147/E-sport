@@ -25,13 +25,12 @@ public class PlayerStatistics
     public int TotalGames { get; set; }
     public int Wins { get; set; }
     public int Losses { get; set; }
-    // Ovako nateramo Mongo da vidi i upiše WinRate
-    [BsonElement("WinRate")]
-    public double WinRate
-    {
-        get => TotalGames > 0 ? Math.Round((double)Wins / TotalGames, 2) : 0;
-        set { /* Prazan set jer se polje samo računa */ }
+    public int TournamentsPlayed { get; set; }
+    public int TournamentWins { get; set; }
+    public double TournamentWinRate { get; set; }
 
-    }
+    // Ovako nateramo Mongo da vidi i upiše WinRate
+    //[BsonElement("WinRate")]
+    public double WinRate { get; set; }
     public DateTime LastGameAt { get; set; }
 }

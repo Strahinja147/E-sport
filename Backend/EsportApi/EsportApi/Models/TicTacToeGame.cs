@@ -7,6 +7,8 @@
         public required string CurrentTurn { get; set; } // "X" ili "O"
         public int Version { get; set; } // Inkrementira se pri svakom potezu
         public string Status { get; set; } = "InProgress"; // "InProgress", "Draw", "Won"
+
+        public string? TournamentId { get; set; } // DODATO: Ako ovo nije null, znači da se igra turnir!
         /* 
        ZAŠTO: 
        1. Version: Sprečava "race condition". Ako dva poteza stignu istovremeno, 

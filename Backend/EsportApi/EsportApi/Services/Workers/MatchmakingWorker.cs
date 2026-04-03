@@ -6,9 +6,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.SignalR;
 using EsportApi.Hubs; // Tvoj Hub
-using EsportApi.Services.Interfaces; // Tvoji interfejsi
+using EsportApi.Services.Interfaces;
 
-namespace EsportApi.Services
+namespace EsportApi.Services.Workers
 {
     public class MatchmakingWorker : BackgroundService
     {

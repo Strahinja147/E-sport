@@ -4,6 +4,8 @@ using MongoDB.Bson;
 using StackExchange.Redis;
 using System.Text.Json;
 using EsportApi.Models.DTOs;
+using EsportApi.Services.Interfaces;
+using Cassandra;
 
 namespace EsportApi.Services
 {
@@ -14,8 +16,9 @@ namespace EsportApi.Services
         private readonly IMongoCollection<Match> _matchesCollection;
         private readonly IMongoCollection<UserProfile> _usersCollection;
         private readonly IDatabase _redisDb;
+        private readonly Cassandra.ISession _cassandra; // DODATO
 
-        public TournamentService(IMongoClient mongoClient, IConnectionMultiplexer redis)
+        public TournamentService(IMongoClient mongoClient, IConnectionMultiplexer redis, Cassandra.ISession cassandra)
         {
             _mongoClient = mongoClient;
             var db = _mongoClient.GetDatabase("EsportDb");
@@ -24,8 +27,17 @@ namespace EsportApi.Services
             _tournamentsCollection = db.GetCollection<Tournament>("Tournaments");
             _matchesCollection = db.GetCollection<Match>("Matches");
             _usersCollection = db.GetCollection<UserProfile>("Users");
-
             _redisDb = redis.GetDatabase();
+            _cassandra = cassandra;
+
+            // Kreiramo tabelu za istoriju turnira
+            _cassandra.Execute(@"
+                CREATE TABLE IF NOT EXISTS esports.tournament_history (
+                tournament_id text PRIMARY KEY,
+                name text,
+                completed_at timestamp,
+                winner_id text
+            )");
         }
 
         public async Task<Tournament> CreateTournament(string name)
@@ -87,17 +99,55 @@ namespace EsportApi.Services
 
                 if (tournament == null) throw new Exception("Turnir ne postoji!");
 
-                // Nalazimo u kojoj rundi se nalazio ovaj meč
                 var currentRound = tournament.Rounds.FirstOrDefault(r => r.MatchIds.Contains(matchId));
                 if (currentRound == null) throw new Exception("Meč ne pripada ovom turniru!");
 
                 // 3. DA LI JE OVO FINALE? (Ako runda ima samo 1 meč, to je finale)
                 if (currentRound.MatchIds.Count == 1)
                 {
-                    // KRAJ TURNIRA! Ne pravimo nove mečeve. 
-                    // Ovde možeš dodati u MongoDB da je ceo Tournament.Status = "Completed"
                     Console.WriteLine($"\n*** KRAJ TURNIRA! APSOLUTNI POBEDNIK JE: {winnerId} ***\n");
                     tournament.Status = "Completed";
+
+                    // ========================================================
+                    // MAGIJA: NAGRADA ZA ŠAMPIONA I SINHRONIZACIJA SVIH BAZA
+                    // ========================================================
+                    var winner = await _usersCollection.Find(session, u => u.Id == winnerId).FirstOrDefaultAsync();
+                    if (winner != null)
+                    {
+                        // Računamo nove vrednosti
+                        int newElo = winner.EloRating + 500;
+                        int newCoins = winner.Coins + 500;
+                        int newTourWins = winner.Stats.TournamentWins + 1;
+                        double newTourWinRate = winner.Stats.TournamentsPlayed > 0
+                            ? Math.Round((double)newTourWins / winner.Stats.TournamentsPlayed, 2)
+                            : 1.0;
+
+                        // A. MONGODB: Ažuriranje unutar transakcije
+                        var winnerUpdate = Builders<UserProfile>.Update
+                            .Set(u => u.EloRating, newElo)
+                            .Set(u => u.Coins, newCoins)
+                            .Set(u => u.Stats.TournamentWins, newTourWins)
+                            .Set(u => u.Stats.TournamentWinRate, newTourWinRate);
+
+                        await _usersCollection.UpdateOneAsync(session, u => u.Id == winnerId, winnerUpdate);
+
+                        // B. REDIS: Odmah osvežavamo Leaderboard jer je igrač dobio +500 ELO
+                        await _redisDb.SortedSetAddAsync("leaderboard_elo", winnerId, newElo);
+
+                        // C. CASSANDRA: Beležimo ogroman skok u istoriji progresa (za grafikon)
+                        var progQuery = "INSERT INTO esports.player_progress_history (user_id, timestamp, elo, coins, change_reason) VALUES (?, toTimestamp(now()), ?, ?, ?)";
+                        var preparedProg = await _cassandra.PrepareAsync(progQuery);
+                        await _cassandra.ExecuteAsync(preparedProg.Bind(winnerId, newElo, newCoins, "Tournament Win"));
+                    }
+                    // ========================================================
+
+                    // Sačuvaj status turnira u Mongo
+                    await _tournamentsCollection.ReplaceOneAsync(session, tourFilter, tournament);
+
+                    // CASSANDRA: Arhiviranje turnira u istoriju
+                    var query = "INSERT INTO esports.tournament_history (tournament_id, name, completed_at, winner_id) VALUES (?, ?, toTimestamp(now()), ?)";
+                    var stmt = await _cassandra.PrepareAsync(query);
+                    await _cassandra.ExecuteAsync(stmt.Bind(tournament.Id, tournament.Name, winnerId));
 
                     await session.CommitTransactionAsync();
                     await _redisDb.KeyDeleteAsync($"tournament:{tournamentId}");
@@ -108,17 +158,18 @@ namespace EsportApi.Services
                 int nextRoundNumber = currentRound.RoundNumber + 1;
                 var nextRound = tournament.Rounds.FirstOrDefault(r => r.RoundNumber == nextRoundNumber);
 
-                bool tournamentUpdated = false; // Prati da li moramo da snimimo promenu u turniru
+                bool tournamentUpdated = false;
 
                 if (nextRound == null)
                 {
-                    // Sledeća runda još ne postoji, Pera je prvi koji je prošao dalje!
+                    // Pravimo meč za sledeću rundu (Pera prvi prošao)
                     var newMatch = new Match
                     {
                         Id = ObjectId.GenerateNewId().ToString(),
                         Player1Id = winnerId,
-                        Player2Id = "TBD", // Čeka protivnika
-                        Status = "Pending"
+                        Player2Id = "TBD",
+                        Status = "Pending",
+                        TournamentId = tournamentId // Bitno za tvoj Lazy Load!
                     };
                     await _matchesCollection.InsertOneAsync(session, newMatch);
 
@@ -131,8 +182,7 @@ namespace EsportApi.Services
                 }
                 else
                 {
-                    // Sledeća runda postoji! Da li neko već čeka protivnika?
-                    // Vadimo sve mečeve iz sledeće runde da nađemo onaj sa "TBD"
+                    // Proveri da li neko već čeka (TBD) u sledećoj rundi
                     var nextRoundMatches = await _matchesCollection
                         .Find(session, Builders<Match>.Filter.In(m => m.Id, nextRound.MatchIds))
                         .ToListAsync();
@@ -141,19 +191,20 @@ namespace EsportApi.Services
 
                     if (waitingMatch != null)
                     {
-                        // Našli smo meč gde neko čeka! Pera ulazi kao Player 2.
+                        // Spajamo pobednika sa onim koji već čeka
                         var updateWaitingMatch = Builders<Match>.Update.Set(m => m.Player2Id, winnerId);
                         await _matchesCollection.UpdateOneAsync(session, m => m.Id == waitingMatch.Id, updateWaitingMatch);
                     }
                     else
                     {
-                        // Svi postojeći mečevi u sledećoj rundi su već puni. Pravimo novi!
+                        // Pravimo novi meč u postojećoj sledećoj rundi
                         var newMatch = new Match
                         {
                             Id = ObjectId.GenerateNewId().ToString(),
                             Player1Id = winnerId,
                             Player2Id = "TBD",
-                            Status = "Pending"
+                            Status = "Pending",
+                            TournamentId = tournamentId
                         };
                         await _matchesCollection.InsertOneAsync(session, newMatch);
                         nextRound.MatchIds.Add(newMatch.Id);
@@ -161,15 +212,13 @@ namespace EsportApi.Services
                     }
                 }
 
-                // 5. Ako smo menjali sam dokument turnira (dodali rundu ili ID meča), sačuvaj ga
                 if (tournamentUpdated)
                 {
                     await _tournamentsCollection.ReplaceOneAsync(session, tourFilter, tournament);
                 }
 
-                // Sve je prošlo super!
                 await session.CommitTransactionAsync();
-                await _redisDb.KeyDeleteAsync($"tournament:{tournamentId}"); // Brišemo keš
+                await _redisDb.KeyDeleteAsync($"tournament:{tournamentId}");
                 return true;
             }
             catch (Exception ex)
@@ -222,7 +271,8 @@ namespace EsportApi.Services
                         Id = ObjectId.GenerateNewId().ToString(),
                         Player1Id = playerIds[i],
                         Player2Id = playerIds[i + 1],
-                        Status = "Pending" // Meč tek treba da se igra
+                        Status = "Pending", // Meč tek treba da se igra
+                        TournamentId = tournamentId
                     };
 
                     await _matchesCollection.InsertOneAsync(session, newMatch);
@@ -245,6 +295,28 @@ namespace EsportApi.Services
                     await _tournamentsCollection.ReplaceOneAsync(session, tourFilter, tournament);
                 }
 
+                foreach (var playerId in cleanedPlayerIds)
+                {
+                    // Dohvatamo igrača kroz sesiju (transakciju)
+                    var user = await _usersCollection.Find(session, u => u.Id == playerId).FirstOrDefaultAsync();
+                    if (user != null)
+                    {
+                        // Računamo novo stanje (Ušao je u novi turnir)
+                        int newPlayed = user.Stats.TournamentsPlayed + 1;
+                        int currentWins = user.Stats.TournamentWins; // Pobede ostaju iste dok ne osvoji
+
+                        // Računamo novi WinRate za turnire
+                        double newTourWinRate = Math.Round((double)currentWins / newPlayed, 2);
+
+                        // Pripremamo Update.Set za fizički upis u Mongo
+                        var updateStats = Builders<UserProfile>.Update
+                            .Set(u => u.Stats.TournamentsPlayed, newPlayed)
+                            .Set(u => u.Stats.TournamentWinRate, newTourWinRate);
+
+                        // Šaljemo u bazu unutar transakcije!
+                        await _usersCollection.UpdateOneAsync(session, u => u.Id == playerId, updateStats);
+                    }
+                }
                 // 3. Commit transakcije
                 await session.CommitTransactionAsync();
 

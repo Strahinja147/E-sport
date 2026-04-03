@@ -17,10 +17,10 @@ namespace EsportApi.Controllers
         }
 
         [HttpPost("start")]
-        public async Task<IActionResult> Start(string p1, string p2)
+        public async Task<IActionResult> Start(string p1, string p2, string? matchId = null, string? tournamentId = null)
         {
-            var matchId = await _gameService.StartGameAsync(p1, p2);
-            return Ok(new { MatchId = matchId });
+            var newMatchId = await _gameService.StartGameAsync(p1, p2, matchId, tournamentId);
+            return Ok(new { MatchId = newMatchId });
         }
 
         [HttpGet("{matchId}")]
@@ -35,16 +35,12 @@ namespace EsportApi.Controllers
         [HttpPost("move")]
         public async Task<IActionResult> Move(string matchId, string playerId, int position, string symbol, int version)
         {
+            // 1. Tvoj servis odradi sav posao (promeni tablu, proveri pobedu, azurira ELO u Mongo-u i telemetriju u Cassandri)
             var result = await _gameService.MakeMoveAsync(matchId, playerId, position, symbol, version);
 
             if (result.StartsWith("Greska")) return BadRequest(new { Message = result });
 
-            // Ako rezultat vraća "Kraj! Pobednik...", dodajemo pobedu u leaderboard!
-            if (result.Contains("Pobednik"))
-            {
-                await _matchmakingService.AddWin(playerId);
-            }
-
+            // 2. Više nam ne treba AddWin ovde, jer je GameService već ažurirao bazu!
             return Ok(new { Message = result });
         }
 

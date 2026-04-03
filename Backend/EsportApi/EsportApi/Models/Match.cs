@@ -8,6 +8,7 @@ namespace EsportApi.Models
         [BsonId]
         [BsonRepresentation(BsonType.ObjectId)]
         public required string Id { get; set; }
+        public string? TournamentId { get; set; }
         public required string Player1Id { get; set; }
         public required string Player2Id { get; set; }
         public string? WinnerId { get; set; } // ? znači da može biti null dok meč traje

@@ -1,6 +1,7 @@
 using Cassandra;
 using EsportApi.Services;
 using EsportApi.Services.Interfaces;
+using EsportApi.Services.Workers;
 using MongoDB.Driver;
 using StackExchange.Redis;
 
@@ -39,9 +40,11 @@ builder.Services.AddScoped<IMatchmakingService, EsportApi.Services.MatchmakingSe
 
 builder.Services.AddSignalR();
 
-builder.Services.AddHostedService<EsportApi.Services.MatchmakingWorker>();
+builder.Services.AddHostedService<MatchmakingWorker>();
 
-builder.Services.AddHostedService<EsportApi.Services.LeaderboardSnapshotWorker>();
+builder.Services.AddHostedService<LeaderboardSnapshotWorker>();
+
+builder.Services.AddHostedService<TournamentWorker>();
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())

@@ -1,7 +1,7 @@
 ﻿using EsportApi.Models;
 using EsportApi.Models.DTOs;
 
-namespace EsportApi.Services
+namespace EsportApi.Services.Interfaces
 {
     public interface ITournamentService
     {

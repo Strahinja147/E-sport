@@ -9,23 +9,21 @@ namespace EsportApi.Services
     {
         private readonly IDatabase _redisDb;
         private readonly IMongoCollection<UserProfile> _userCollection;
-        private readonly IGameService _gameService; // <-- DODATO
+        private readonly IGameService _gameService; 
 
         public MatchmakingService(IConnectionMultiplexer redis, IMongoClient mongoClient, IGameService gameService)
         {
-            // Povezivanje na Redis
             _redisDb = redis.GetDatabase();
 
-            // Povezivanje na MongoDB kolekciju
+            
             var mongoDb = mongoClient.GetDatabase("EsportDb");
             _userCollection = mongoDb.GetCollection<UserProfile>("Users");
-            _gameService = gameService; // <-- DODATO
+            _gameService = gameService; 
         }
 
-        // --- MATCHMAKING (Redis Lists) ---
         public async Task AddToQueue(string userId)
         {
-            // LPUSH: Dodajemo igraca u red (Redis lista)
+            
             await _redisDb.ListRightPushAsync("matchmaking_queue", userId);
         }
 
@@ -36,8 +34,6 @@ namespace EsportApi.Services
 
             var p1Profile = await _userCollection.Find(u => u.Id == p1Id.ToString()).FirstOrDefaultAsync();
 
-            // 1. ODBRANA OD "DUHOVA": Ako Player 1 ne postoji u Mongu, 
-            // ignorisemo ga (vec smo ga izbacili iz Redisa sa Pop) i prekidamo.
             if (p1Profile == null) return null;
 
             int p1Elo = p1Profile.EloRating;
@@ -49,8 +45,7 @@ namespace EsportApi.Services
                 string p2Id = p2Value.ToString();
                 var p2Profile = await _userCollection.Find(u => u.Id == p2Id).FirstOrDefaultAsync();
 
-                // 2. ODBRANA: Ako potencijalni protivnik ne postoji u Mongu,
-                // brisemo ga iz Redis reda i prelazimo na sledeceg!
+                
                 if (p2Profile == null)
                 {
                     await _redisDb.ListRemoveAsync("matchmaking_queue", p2Id);
@@ -78,35 +73,95 @@ namespace EsportApi.Services
             return null;
         }
 
-        // --- LEADERBOARD (Redis Sorted Sets + Mongo) ---
-        public async Task AddWin(string userId)
+        // NOVA METODA ZA LEADERBOARD (Rangira po ELO-u iz Monga i koristi Redis kao brzi keš)
+        public async Task<List<LeaderboardEntry>> GetTopPlayers(int count = 10)
         {
-            // ZINCRBY: Povecava skor za 1 u Sorted Set-u pod kljucem "leaderboard"
-            await _redisDb.SortedSetIncrementAsync("leaderboard", userId, 1);
-        }
+            var topFromRedis = await _redisDb.SortedSetRangeByRankWithScoresAsync(
+                "leaderboard_elo", 0, count - 1, Order.Descending);
 
-        public async Task<List<LeaderboardEntry>> GetTopPlayers(int count)
-        {
-            // 1. Izvuci top N ID-jeva iz Redisa (Sorted Set)
-            var topFromRedis = await _redisDb.SortedSetRangeByRankWithScoresAsync("leaderboard", 0, count - 1, Order.Descending);
+            if (topFromRedis.Length == 0) return new List<LeaderboardEntry>();
+
+            var ids = topFromRedis.Select(x => x.Element.ToString()).ToList();
+
+            var users = await _userCollection.Find(u => ids.Contains(u.Id)).ToListAsync();
+
+            var userDict = users.ToDictionary(u => u.Id, u => u);
 
             var result = new List<LeaderboardEntry>();
+            int rank = 1;
 
             foreach (var entry in topFromRedis)
             {
                 string userId = entry.Element.ToString();
 
-                // 2. Za svaki ID, "skokni" do MongoDB-a po Username
-                var user = await _userCollection.Find(u => u.Id == userId).FirstOrDefaultAsync();
-
-                result.Add(new LeaderboardEntry
+                if (userDict.TryGetValue(userId, out var user))
                 {
-                    UserId = userId,
-                    Wins = (int)entry.Score,
-                    Username = user?.Username ?? "Unknown Player"
-                });
+                    result.Add(new LeaderboardEntry
+                    {
+                        Rank = rank++,
+                        UserId = userId,
+                        Username = user.Username, // SAD IMAMO IME!
+                        EloRating = (int)entry.Score,
+                        Wins = user.Stats.Wins,
+                        TournamentWins = user.Stats.TournamentWins
+                    });
+                }
             }
+
             return result;
+        }
+        public async Task UpdateLeaderboardCache(string userId, int newElo)
+        {
+            // Upisujemo u Sorted Set "leaderboard_elo"
+            // Clan: UserId, Score: EloRating
+            await _redisDb.SortedSetAddAsync("leaderboard_elo", userId, newElo);
+        }
+
+        public async Task SyncLeaderboardAsync()
+        {
+            // 1. Povuci sve korisnike iz MongoDB-a
+            var allUsers = await _userCollection.Find(_ => true).ToListAsync();
+
+            // 2. Napuni Redis Sorted Set
+            foreach (var user in allUsers)
+            {
+                await _redisDb.SortedSetAddAsync("leaderboard_elo", user.Id, user.EloRating);
+            }
+        }
+
+        public async Task<string> JoinTournamentQueueAsync(string userId)
+        {
+            var user = await _userCollection.Find(u => u.Id == userId).FirstOrDefaultAsync();
+            if (user == null) return "Korisnik ne postoji.";
+
+            if (user.EloRating < 1200)
+                return $"Nedovoljan Elo rejting za turnir. Tvoj Elo: {user.EloRating}, Minimum: 1200.";
+
+            var queue = await _redisDb.ListRangeAsync("tournament_queue");
+            if (queue.ToStringArray().Contains(userId))
+                return "Vec si u redu za turnir.";
+
+            await _redisDb.ListRightPushAsync("tournament_queue", userId);
+            return "Uspešno prijavljen u red za turnir!";
+        }
+
+        public async Task<List<string>?> CheckTournamentQueueAsync(int requiredPlayers)
+        {
+            var length = await _redisDb.ListLengthAsync("tournament_queue");
+
+            if (length >= requiredPlayers)
+            {
+                var players = new List<string>();
+                
+                for (int i = 0; i < requiredPlayers; i++)
+                {
+                    var p = await _redisDb.ListLeftPopAsync("tournament_queue");
+                    players.Add(p.ToString());
+                }
+                return players; 
+            }
+
+            return null; 
         }
     }
 }

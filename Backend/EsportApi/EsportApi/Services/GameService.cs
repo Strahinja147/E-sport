@@ -15,14 +15,20 @@ namespace EsportApi.Services
         private readonly IConnectionMultiplexer _redis;
         private readonly Cassandra.ISession _cassandra;
         private readonly IHubContext<GameHub> _hubContext;
+        private readonly ITournamentService _tournamentService;
+        private readonly IMongoCollection<Match> _matchesCollection;
 
-        public GameService(IMongoClient mongo, IConnectionMultiplexer redis, Cassandra.ISession cassandra, IHubContext<GameHub> hubContext)
+        public GameService(IMongoClient mongo, IConnectionMultiplexer redis, Cassandra.ISession cassandra, IHubContext<GameHub> hubContext, ITournamentService tournamentService)
         {
             _mongo = mongo;
             _redis = redis;
             _cassandra = cassandra;
             _hubContext = hubContext;
+            _tournamentService = tournamentService;
+            var database = _mongo.GetDatabase("EsportDb");
+            _matchesCollection = database.GetCollection<Match>("Matches");
             InitializeCassandraTables();
+            
         }
 
         private void InitializeCassandraTables()
@@ -55,32 +61,44 @@ namespace EsportApi.Services
                     player_id text,
                     PRIMARY KEY (date, score, player_id)
                 ) WITH CLUSTERING ORDER BY (score DESC, player_id ASC)");
+
+            _cassandra.Execute(@"
+                CREATE TABLE IF NOT EXISTS esports.player_progress_history (
+                    user_id text,
+                    timestamp timestamp,
+                    elo int,
+                    coins int,
+                    change_reason text,
+                    PRIMARY KEY (user_id, timestamp)
+                ) WITH CLUSTERING ORDER BY (timestamp DESC)");
         }
 
-        public async Task<string> StartGameAsync(string player1Id, string player2Id)
+        public async Task<string> StartGameAsync(string player1Id, string player2Id, string? matchId = null, string? tournamentId = null)
         {
-            var matchId = Guid.NewGuid().ToString();
+            // Ako nam kolega prosledi turnirski matchId koristimo njega, inače pravimo novi
+            var finalMatchId = matchId ?? Guid.NewGuid().ToString();
             var now = DateTime.UtcNow;
 
             var game = new TicTacToeGame
             {
-                Id = matchId,
+                Id = finalMatchId,
+                TournamentId = tournamentId, // Čuvamo turnirski ID u Redisu
                 Board = "_________",
                 CurrentTurn = "X",
                 Status = "InProgress",
-                Version = 1 // Pocetna verzija
+                Version = 1
             };
 
             var db = _redis.GetDatabase();
 
-            await db.HashSetAsync($"match_players:{matchId}", new HashEntry[] {
+            await db.HashSetAsync($"match_players:{finalMatchId}", new HashEntry[] {
                 new HashEntry("P1", player1Id),
                 new HashEntry("P2", player2Id),
-                new HashEntry("LastMoveAt", now.Ticks.ToString()) // Pamtimo vreme pocetka radi prve kalkulacije
+                new HashEntry("LastMoveAt", now.Ticks.ToString())
             });
 
-            await db.StringSetAsync($"match:{matchId}", JsonSerializer.Serialize(game), TimeSpan.FromMinutes(30));
-            return matchId;
+            await db.StringSetAsync($"match:{finalMatchId}", JsonSerializer.Serialize(game), TimeSpan.FromMinutes(30));
+            return finalMatchId;
         }
 
         public async Task<TicTacToeGame> GetGameStateAsync(string matchId)
@@ -95,7 +113,15 @@ namespace EsportApi.Services
             var db = _redis.GetDatabase();
             var game = await GetGameStateAsync(matchId);
 
-            if (game == null) return "Greska: Mec nije pronadjen.";
+            if (game == null)
+            {
+                var mongoMatch = await _matchesCollection.Find(m => m.Id == matchId).FirstOrDefaultAsync();
+
+                if (mongoMatch == null) return "Greska: Mec nije pronadjen.";
+
+                await StartGameAsync(mongoMatch.Player1Id, mongoMatch.Player2Id, mongoMatch.Id, mongoMatch.TournamentId);
+                game = await GetGameStateAsync(matchId);
+            }
 
             // --- FINESA 2: OPTIMISTIC CONCURRENCY (Atomska preciznost) ---
             if (game.Version != clientVersion)
@@ -140,12 +166,28 @@ namespace EsportApi.Services
                     await UpdateMongoStats(playerId, true);
                     string loserId = (playerId == p1Id) ? p2Id.ToString() : p1Id.ToString();
                     await UpdateMongoStats(loserId, false);
+
+                    // ==========================================
+                    // INTEGRACIJA SA TURNIROM (OVO JE TVOJA IDEJA!)
+                    // ==========================================
+                    if (!string.IsNullOrEmpty(game.TournamentId))
+                    {
+                        // AUTOMATSKI zovi koleginu metodu! Nema više ručnog kucanja u Swaggeru!
+                        bool advanceSuccess = await _tournamentService.AdvanceWinner(game.TournamentId, matchId, playerId);
+                        if (!advanceSuccess)
+                        {
+                            Console.WriteLine("KRITIČNO: Transakcija za turnir nije uspela!");
+                        }
+                    }
+                    // ==========================================
                 }
 
+                // Cassandra upis
                 var endMatchQuery = "INSERT INTO esports.matches_history (match_id, played_at, result) VALUES (?, toTimestamp(now()), ?)";
                 var stEnd = await _cassandra.PrepareAsync(endMatchQuery);
                 await _cassandra.ExecuteAsync(stEnd.Bind(matchId, resultText));
 
+                // Brisanje iz Redisa
                 await db.KeyDeleteAsync($"match:{matchId}");
                 await db.KeyDeleteAsync($"match_players:{matchId}");
 
@@ -178,13 +220,68 @@ namespace EsportApi.Services
         private async Task UpdateMongoStats(string userId, bool won)
         {
             var users = _mongo.GetDatabase("EsportDb").GetCollection<UserProfile>("Users");
-            var filter = Builders<UserProfile>.Filter.Eq(u => u.Id, userId);
-            var update = won
-                ? Builders<UserProfile>.Update.Inc(u => u.Stats.Wins, 1).Inc(u => u.Stats.TotalGames, 1).Inc(u => u.EloRating, 25).Inc(u => u.Coins, 200)
-                : Builders<UserProfile>.Update.Inc(u => u.Stats.Losses, 1).Inc(u => u.Stats.TotalGames, 1).Inc(u => u.EloRating, -15);
-            await users.UpdateOneAsync(filter, update);
-        }
 
+            // 1. Dohvatamo trenutnog korisnika iz MongoDB-a
+            var user = await users.Find(u => u.Id == userId).FirstOrDefaultAsync();
+            if (user == null) return;
+
+            // 2. Računamo novo stanje statistike (Wins, Losses, Games)
+            int newTotalGames = user.Stats.TotalGames + 1;
+            int newWins = won ? user.Stats.Wins + 1 : user.Stats.Wins;
+            int newLosses = won ? user.Stats.Losses : user.Stats.Losses + 1;
+            double newWinRate = Math.Round((double)newWins / newTotalGames, 2);
+
+            // 3. Računamo novi ELO (Pobednik +25, Gubitnik -15)
+            int eloChange = won ? 25 : -15;
+            int newElo = user.EloRating + eloChange;
+
+            // 4. Računamo nove Koine (Pobednik dobija 200)
+            int newCoins = won ? user.Coins + 200 : user.Coins;
+
+            // 5. MONGODB: Ažuriramo profil (Fizički upisujemo sve izračunate vrednosti)
+            var update = Builders<UserProfile>.Update
+                .Set(u => u.Stats.TotalGames, newTotalGames)
+                .Set(u => u.Stats.Wins, newWins)
+                .Set(u => u.Stats.Losses, newLosses)
+                .Set(u => u.Stats.WinRate, newWinRate)
+                .Set(u => u.EloRating, newElo)
+                .Set(u => u.Coins, newCoins)
+                .Set(u => u.Stats.LastGameAt, DateTime.UtcNow);
+
+            await users.UpdateOneAsync(u => u.Id == userId, update);
+
+            // 6. REDIS: Automatsko osvežavanje globalne rang liste (Sorted Set)
+            var redisDb = _redis.GetDatabase();
+            await redisDb.SortedSetAddAsync("leaderboard_elo", userId, newElo);
+
+            // 7. CASSANDRA: Beleženje istorije napretka (Time-Series za grafikone)
+            // Ovo je ključno za analizu napretka kroz godine
+            var progressQuery = "INSERT INTO esports.player_progress_history (user_id, timestamp, elo, coins, change_reason) VALUES (?, toTimestamp(now()), ?, ?, ?)";
+            var preparedProgress = await _cassandra.PrepareAsync(progressQuery);
+
+            // Upisujemo u Cassandru trenutni presek stanja nakon ovog meča
+            await _cassandra.ExecuteAsync(preparedProgress.Bind(userId, newElo, newCoins, "Match Result"));
+        }
+        public async Task<List<PlayerProgress>> GetPlayerProgressAsync(string userId)
+        {
+            var list = new List<PlayerProgress>();
+            var query = "SELECT timestamp, elo, coins, change_reason FROM esports.player_progress_history WHERE user_id = ?";
+            var prepared = await _cassandra.PrepareAsync(query);
+            var rows = await _cassandra.ExecuteAsync(prepared.Bind(userId));
+
+            foreach (var row in rows)
+            {
+                list.Add(new PlayerProgress
+                {
+                    UserId = userId,
+                    Timestamp = row.GetValue<DateTimeOffset>("timestamp").DateTime,
+                    Elo = row.GetValue<int>("elo"),
+                    Coins = row.GetValue<int>("coins"),
+                    ChangeReason = row.GetValue<string>("change_reason")
+                });
+            }
+            return list;
+        }
         public async Task SaveLeaderboardSnapshotAsync()
         {
             var db = _redis.GetDatabase();

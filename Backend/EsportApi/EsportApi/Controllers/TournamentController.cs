@@ -1,5 +1,5 @@
 ﻿using EsportApi.Models;
-using EsportApi.Services;
+using EsportApi.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
 namespace EsportApi.Controllers

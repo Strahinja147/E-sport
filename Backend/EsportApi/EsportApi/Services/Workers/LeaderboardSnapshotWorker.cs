@@ -6,7 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using EsportApi.Services.Interfaces;
 
-namespace EsportApi.Services // Ili EsportApi.Workers zavisno kako ste nazvali folder
+namespace EsportApi.Services.Workers // Ili EsportApi.Workers zavisno kako ste nazvali folder
 {
     public class LeaderboardSnapshotWorker : BackgroundService
     {

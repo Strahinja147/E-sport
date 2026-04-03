@@ -10,7 +10,7 @@ namespace EsportApi.Controllers
     public class MatchmakingController : ControllerBase
     {
         private readonly IMatchmakingService _matchService;
-        private readonly IMongoClient _mongoClient; // Samo za Seed metodu
+        private readonly IMongoClient _mongoClient; 
 
         public MatchmakingController(IMatchmakingService matchService, IMongoClient mongoClient)
         {
@@ -29,15 +29,8 @@ namespace EsportApi.Controllers
         public async Task<IActionResult> Check()
         {
             var match = await _matchService.TryMatch();
-            // Sada Swagger vraca lep JSON ako se nadje mec!
+            
             return match != null ? Ok(match) : Ok(new { Message = "Still waiting for players..." });
-        }
-
-        [HttpPost("report-win")]
-        public async Task<IActionResult> Win(string userId)
-        {
-            await _matchService.AddWin(userId);
-            return Ok("Win reported.");
         }
 
         [HttpGet("leaderboard")]
@@ -47,7 +40,6 @@ namespace EsportApi.Controllers
             return Ok(board);
         }
 
-        // Pomocna metoda za testiranje
         [HttpPost("seed-users")]
         public async Task<IActionResult> SeedUsers(string username)
         {
@@ -59,6 +51,22 @@ namespace EsportApi.Controllers
             };
             await collection.InsertOneAsync(newUser);
             return Ok(newUser);
+        }
+        [HttpPost("sync")]
+        public async Task<IActionResult> Sync()
+        {
+            await _matchService.SyncLeaderboardAsync();
+            return Ok("Svi igraci su prebaceni u Redis Leaderboard!");
+        }
+        [HttpPost("join-tournament")]
+        public async Task<IActionResult> JoinTournament(string userId)
+        {
+            var result = await _matchService.JoinTournamentQueueAsync(userId);
+
+            if (result.Contains("Nedovoljan") || result.Contains("ne postoji") || result.Contains("Vec si"))
+                return BadRequest(new { Message = result });
+
+            return Ok(new { Message = result });
         }
     }
 }
