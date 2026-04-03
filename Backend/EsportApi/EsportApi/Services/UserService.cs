@@ -62,5 +62,30 @@ namespace EsportApi.Services
 
             return true;
         }
+
+        public async Task<bool> RejectFriendRequest(string myUserId, string senderId)
+        {
+            return await RemoveFriendship(myUserId, senderId);
+        }
+
+        public async Task<bool> RemoveFriend(string myUserId, string friendId)
+        {
+            return await RemoveFriendship(myUserId, friendId);
+        }
+
+        // PRIVATNA METODA: Radi isti posao za oba slučaja (Briše vezu kod oba igrača)
+        private async Task<bool> RemoveFriendship(string userId1, string userId2)
+        {
+            // 1. Brišemo userId2 iz liste kod userId1
+            // PullFilter traži element u nizu Friends gde je UserId jednak onome koga brišemo
+            var update1 = Builders<UserProfile>.Update.PullFilter(u => u.Friends, f => f.UserId == userId2);
+            await _usersCollection.UpdateOneAsync(u => u.Id == userId1, update1);
+
+            // 2. Brišemo userId1 iz liste kod userId2
+            var update2 = Builders<UserProfile>.Update.PullFilter(u => u.Friends, f => f.UserId == userId1);
+            await _usersCollection.UpdateOneAsync(u => u.Id == userId2, update2);
+
+            return true;
+        }
     }
 }

@@ -7,5 +7,6 @@ namespace EsportApi.Services.Interfaces
         Task<Team> CreateTeam(string name, string ownerId);
         Task<bool> AddMemberToTeam(string teamId, string userId);
         Task<Team?> GetTeam(string teamId);
+        Task RecalculateTeamElo(string teamId);
     }
 }

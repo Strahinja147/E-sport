@@ -34,6 +34,9 @@ namespace EsportApi.Services
             };
 
             await _teamsCollection.InsertOneAsync(team);
+            var userUpdate = Builders<UserProfile>.Update.Set(u => u.CurrentTeamId, team.Id);
+            await _usersCollection.UpdateOneAsync(u => u.Id == ownerId, userUpdate);
+
             return team;
         }
 
@@ -50,6 +53,7 @@ namespace EsportApi.Services
             var newUser = await _usersCollection.Find(u => u.Id == userId).FirstOrDefaultAsync();
             if (newUser == null) throw new Exception("Korisnik ne postoji!");
 
+            newUser.CurrentTeamId = teamId; 
             // 4. RAČUNANJE NOVOG ELO PROSEKA
             // Pravimo listu svih ID-jeva (stari članovi + ovaj novi što tek ulazi)
             var allMemberIds = new List<string>(team.MemberIds) { userId };
@@ -67,6 +71,8 @@ namespace EsportApi.Services
                 .Set(t => t.TeamElo, newTeamElo);
 
             var result = await _teamsCollection.UpdateOneAsync(t => t.Id == teamId, update);
+            var userUpdate = Builders<UserProfile>.Update.Set(u => u.CurrentTeamId, teamId);
+            await _usersCollection.UpdateOneAsync(u => u.Id == userId, userUpdate);
 
             return result.ModifiedCount > 0;
         }
@@ -74,6 +80,23 @@ namespace EsportApi.Services
         public async Task<Team?> GetTeam(string teamId)
         {
             return await _teamsCollection.Find(t => t.Id == teamId).FirstOrDefaultAsync();
+        }
+
+        public async Task RecalculateTeamElo(string teamId)
+        {
+            // 1. Nađemo tim
+            var team = await _teamsCollection.Find(t => t.Id == teamId).FirstOrDefaultAsync();
+            if (team == null || team.MemberIds.Count == 0) return;
+
+            // 2. Povučemo sve članove tima (njihove najnovije ELO rejtinge)
+            var allMembers = await _usersCollection.Find(u => team.MemberIds.Contains(u.Id)).ToListAsync();
+
+            // 3. Računamo novi prosek
+            int newTeamElo = (int)allMembers.Average(u => u.EloRating);
+
+            // 4. Ažuriramo samo ELO u timu
+            var update = Builders<Team>.Update.Set(t => t.TeamElo, newTeamElo);
+            await _teamsCollection.UpdateOneAsync(t => t.Id == teamId, update);
         }
     }
 }

@@ -150,5 +150,32 @@ namespace EsportApi.Controllers
                 return BadRequest(ex.Message);
             }
         }
+
+        [HttpPost("reject-friend-request")]
+        public async Task<IActionResult> RejectRequest(string myUserId, string senderId)
+        {
+            try
+            {
+                var success = await _userService.RejectFriendRequest(myUserId, senderId);
+                return success ? Ok("Zahtev za prijateljstvo odbijen!") : BadRequest("Greška pri odbijanju.");
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(ex.Message);
+            }
+        }
+        [HttpPost("remove-friend")]
+        public async Task<IActionResult> RemoveFriend(string myUserId, string friendId)
+        {
+            try
+            {
+                var success = await _userService.RemoveFriend(myUserId, friendId);
+                return success ? Ok("Prijatelj obrisan sa liste!") : BadRequest("Greška pri brisanju prijatelja.");
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(ex.Message);
+            }
+        }
     }
 }
