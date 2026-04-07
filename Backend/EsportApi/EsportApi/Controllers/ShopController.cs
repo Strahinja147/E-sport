@@ -1,4 +1,4 @@
-﻿using EsportApi.Models;
+using EsportApi.Models;
 using EsportApi.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 using MongoDB.Driver;
@@ -11,6 +11,7 @@ namespace EsportApi.Controllers
     {
         private readonly IShopService _shopService;
         private readonly IMongoClient _mongoClient;
+
         public ShopController(IShopService shopService, IMongoClient mongoClient)
         {
             _shopService = shopService;
@@ -22,23 +23,36 @@ namespace EsportApi.Controllers
         {
             var result = await _shopService.BuyItemAsync(userId, itemId);
 
-            // Popravka: Proveravamo da li rezultat sadrži potvrdu uspeha, bez obzira na tačan tekst
             if (result.Contains("USPEŠNO") || result.Contains("Uspešna"))
             {
                 return Ok(new { Message = result });
             }
 
-            // Ako nije uspeh, onda je greška (nema para, nema na stanju, itd.)
             return BadRequest(new { Message = result });
         }
 
-        [HttpGet("revenue/{yearMonth}")] // Format: 2026-03
+        [HttpDelete("sell")]
+        public async Task<IActionResult> Sell(string userId, string itemId, DateTime purchasedAt)
+        {
+            var result = await _shopService.SellItemAsync(userId, itemId, purchasedAt);
+
+            if (result.Contains("USPEŠNO") || result.Contains("Uspešna"))
+            {
+                return Ok(new { Message = result });
+            }
+
+            return BadRequest(new { Message = result });
+        }
+
+        [HttpGet("revenue/{yearMonth}")]
         public async Task<IActionResult> GetRevenue(string yearMonth)
         {
             var report = await _shopService.GetMonthlyRevenueReportAsync(yearMonth);
 
             if (report.TotalRevenue == 0)
+            {
                 return NotFound($"Nema podataka za mesec {yearMonth}");
+            }
 
             return Ok(report);
         }
@@ -46,7 +60,11 @@ namespace EsportApi.Controllers
         [HttpPost("add-coins")]
         public async Task<IActionResult> AddCoins(string userId, int amount)
         {
-            if (amount <= 0) return BadRequest("Mora biti > 0");
+            if (amount <= 0)
+            {
+                return BadRequest("Mora biti > 0");
+            }
+
             await _shopService.AddCoinsAsync(userId, amount);
             return Ok();
         }
@@ -56,6 +74,7 @@ namespace EsportApi.Controllers
         {
             return Ok(await _shopService.GetAllItemsAsync());
         }
+
         [HttpPost("seed-limited-item")]
         public async Task<IActionResult> SeedLimited()
         {
@@ -65,7 +84,7 @@ namespace EsportApi.Controllers
                 Name = "Zlatni X (Limited Edition)",
                 Price = 1000,
                 IsLimited = true,
-                InitialStock = 5, // Samo 5 komada ikada!
+                InitialStock = 5,
                 CurrentStock = 5
             };
 

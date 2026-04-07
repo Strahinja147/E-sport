@@ -1,9 +1,11 @@
-﻿namespace EsportApi.Models.DTOs
+namespace EsportApi.Models.DTOs
 {
     public class InventoryItemDTO
     {
         public required string ItemId { get; set; }
         public required string ItemName { get; set; }
         public DateTime PurchasedAt { get; set; }
+        public int PurchasePrice { get; set; }
+        public int ResalePrice { get; set; }
     }
 }

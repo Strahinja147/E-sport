@@ -22,6 +22,12 @@ namespace EsportApi.Controllers
             return Ok(tournament);
         }
 
+        [HttpGet]
+        public async Task<IActionResult> GetAllTournaments()
+        {
+            return Ok(await _tournamentService.GetAllTournaments());
+        }
+
         [HttpGet("{id}")]
         public async Task<IActionResult> GetTournament(string id)
         {

@@ -21,14 +21,9 @@ namespace EsportApi.Hubs
         // U GameHub.cs promeni metodu SendMessage:
         public async Task SendMessage(string matchId, string playerId, string message)
         {
-            // Ako nije učesnik, SaveChatMessageAsync će vratiti null i ništa se neće desiti
-            var username = await _gameService.SaveChatMessageAsync(matchId, playerId, message);
-
-            if (username != null)
-            {
-                // Šaljemo poruku SVIMA u sobi (samo ako je igrač validan)
-                await Clients.Group(matchId).SendAsync("ReceiveMessage", username, message);
-            }
+            // Ako nije učesnik, SaveChatMessageAsync će vratiti null i ništa se neće desiti.
+            // Validna poruka se sada dalje salje preko Redis pub/sub subscriber-a.
+            _ = await _gameService.SaveChatMessageAsync(matchId, playerId, message);
         }
     }
 }

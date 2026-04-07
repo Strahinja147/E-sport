@@ -1,9 +1,8 @@
 ﻿using System.Text.Json;
 using Cassandra;
-using EsportApi.Hubs;
 using EsportApi.Models;
+using EsportApi.Models.DTOs;
 using EsportApi.Services.Interfaces;
-using Microsoft.AspNetCore.SignalR;
 using MongoDB.Driver;
 using StackExchange.Redis;
 
@@ -14,64 +13,31 @@ namespace EsportApi.Services
         private readonly IMongoClient _mongo;
         private readonly IConnectionMultiplexer _redis;
         private readonly Cassandra.ISession _cassandra;
-        private readonly IHubContext<GameHub> _hubContext;
         private readonly ITournamentService _tournamentService;
         private readonly IMongoCollection<Match> _matchesCollection;
+        private readonly IMongoCollection<UserProfile> _usersCollection;
+        private readonly IMongoCollection<Tournament> _tournamentsCollection;
         private readonly ITeamService _teamService;
+        private readonly IRedisRealtimePublisher _realtimePublisher;
 
-        public GameService(IMongoClient mongo, IConnectionMultiplexer redis, Cassandra.ISession cassandra, IHubContext<GameHub> hubContext, ITournamentService tournamentService, ITeamService teamService)
+        public GameService(
+            IMongoClient mongo,
+            IConnectionMultiplexer redis,
+            Cassandra.ISession cassandra,
+            ITournamentService tournamentService,
+            ITeamService teamService,
+            IRedisRealtimePublisher realtimePublisher)
         {
             _mongo = mongo;
             _redis = redis;
             _cassandra = cassandra;
-            _hubContext = hubContext;
             _tournamentService = tournamentService;
             var database = _mongo.GetDatabase("EsportDb");
             _matchesCollection = database.GetCollection<Match>("Matches");
-            InitializeCassandraTables();
+            _usersCollection = database.GetCollection<UserProfile>("Users");
+            _tournamentsCollection = database.GetCollection<Tournament>("Tournaments");
             _teamService = teamService;
-        }
-
-        private void InitializeCassandraTables()
-        {
-            // Kreiranje Keyspace-a
-            _cassandra.Execute("CREATE KEYSPACE IF NOT EXISTS esports WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}");
-
-            // 1. Telemetrija poteza
-            _cassandra.Execute(@"CREATE TABLE IF NOT EXISTS esports.moves (
-        match_id text, timestamp timestamp, player_id text, position int, symbol text, duration_ms bigint,
-        PRIMARY KEY (match_id, timestamp)) WITH CLUSTERING ORDER BY (timestamp ASC)");
-
-            // 2. Istorija mečeva
-            _cassandra.Execute("CREATE TABLE IF NOT EXISTS esports.matches_history (match_id text PRIMARY KEY, played_at timestamp, result text)");
-
-            // 3. Leaderboard Snapshots
-            _cassandra.Execute(@"CREATE TABLE IF NOT EXISTS esports.leaderboard_snapshots (
-        date date, score int, player_id text, PRIMARY KEY (date, score, player_id)) WITH CLUSTERING ORDER BY (score DESC, player_id ASC)");
-
-            // 4. Istorija napretka (ELO/Koini kroz vreme)
-            _cassandra.Execute(@"CREATE TABLE IF NOT EXISTS esports.player_progress_history (
-        user_id text, timestamp timestamp, elo int, coins int, change_reason text,
-        PRIMARY KEY (user_id, timestamp)) WITH CLUSTERING ORDER BY (timestamp DESC)");
-
-            // 5. Audit Log (Bezbednost logovanja)
-            _cassandra.Execute(@"CREATE TABLE IF NOT EXISTS esports.login_history (
-        user_id text, timestamp timestamp, ip_address text, device text,
-        PRIMARY KEY (user_id, timestamp)) WITH CLUSTERING ORDER BY (timestamp DESC)");
-
-            // 6. Finansijski logovi (Zarada po mesecima)
-            _cassandra.Execute(@"CREATE TABLE IF NOT EXISTS esports.purchase_logs (
-        year_month text, purchased_at timestamp, user_id text, item_id text, item_name text, price int,
-        PRIMARY KEY (year_month, purchased_at)) WITH CLUSTERING ORDER BY (purchased_at DESC)");
-
-            // 7. Inventar korisnika
-            _cassandra.Execute(@"CREATE TABLE IF NOT EXISTS esports.inventory (
-        user_id text, item_id text, item_name text, purchased_at timestamp,
-        PRIMARY KEY (user_id, purchased_at)) WITH CLUSTERING ORDER BY (purchased_at DESC)");
-
-            // 8. Istorija turnira
-            _cassandra.Execute(@"CREATE TABLE IF NOT EXISTS esports.tournament_history (
-        tournament_id text PRIMARY KEY, name text, completed_at timestamp, winner_id text)");
+            _realtimePublisher = realtimePublisher;
         }
 
         public async Task<string> StartGameAsync(string player1Id, string player2Id, string? matchId = null, string? tournamentId = null)
@@ -87,7 +53,9 @@ namespace EsportApi.Services
                 Board = "_________",
                 CurrentTurn = "X",
                 Status = "InProgress",
-                Version = 1
+                Version = 1,
+                Player1Id = player1Id,
+                Player2Id = player2Id
             };
 
             var db = _redis.GetDatabase();
@@ -98,7 +66,14 @@ namespace EsportApi.Services
                 new HashEntry("LastMoveAt", now.Ticks.ToString())
             });
 
+            await db.ListRemoveAsync("matchmaking_queue", player1Id, -1);
+            await db.ListRemoveAsync("matchmaking_queue", player2Id, -1);
+            await db.ListRemoveAsync("tournament_queue", player1Id, -1);
+            await db.ListRemoveAsync("tournament_queue", player2Id, -1);
+
             await db.StringSetAsync($"match:{finalMatchId}", JsonSerializer.Serialize(game), TimeSpan.FromMinutes(30));
+            await db.StringSetAsync($"user_active_match:{player1Id}", finalMatchId, TimeSpan.FromMinutes(30));
+            await db.StringSetAsync($"user_active_match:{player2Id}", finalMatchId, TimeSpan.FromMinutes(30));
             return finalMatchId;
         }
 
@@ -106,108 +81,288 @@ namespace EsportApi.Services
         {
             var db = _redis.GetDatabase();
             var data = await db.StringGetAsync($"match:{matchId}");
-            return data.IsNullOrEmpty ? null : JsonSerializer.Deserialize<TicTacToeGame>(data);
+            if (data.IsNullOrEmpty)
+            {
+                var mongoMatch = await _matchesCollection.Find(m => m.Id == matchId).FirstOrDefaultAsync();
+                if (mongoMatch == null ||
+                    string.IsNullOrWhiteSpace(mongoMatch.Player1Id) ||
+                    string.IsNullOrWhiteSpace(mongoMatch.Player2Id) ||
+                    mongoMatch.Player2Id == "TBD" ||
+                    string.Equals(mongoMatch.Status, "Finished", StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
+
+                await StartGameAsync(mongoMatch.Player1Id, mongoMatch.Player2Id, mongoMatch.Id, mongoMatch.TournamentId);
+                data = await db.StringGetAsync($"match:{matchId}");
+                if (data.IsNullOrEmpty)
+                {
+                    return null;
+                }
+            }
+
+            var game = JsonSerializer.Deserialize<TicTacToeGame>(data);
+            if (game == null)
+            {
+                return null;
+            }
+
+            if (string.IsNullOrEmpty(game.Player1Id) || string.IsNullOrEmpty(game.Player2Id))
+            {
+                var p1Id = await db.HashGetAsync($"match_players:{matchId}", "P1");
+                var p2Id = await db.HashGetAsync($"match_players:{matchId}", "P2");
+                game.Player1Id = p1Id.IsNullOrEmpty ? null : p1Id.ToString();
+                game.Player2Id = p2Id.IsNullOrEmpty ? null : p2Id.ToString();
+            }
+
+            return game;
+        }
+
+        public async Task<TicTacToeGame> GetMoveAsync(string matchId)
+        {
+            return await GetGameStateAsync(matchId);
+        }
+
+        public async Task<List<MatchHistoryItemDto>> GetMatchHistoryAsync(string userId)
+        {
+            var history = new List<MatchHistoryItemDto>();
+
+            var prepared = await _cassandra.PrepareAsync(
+                "SELECT played_at, match_id, opponent_username, result, symbol, is_tournament, tournament_name FROM esports.matches_history_by_user WHERE user_id = ?");
+            var rows = await _cassandra.ExecuteAsync(prepared.Bind(userId));
+
+            foreach (var row in rows)
+            {
+                history.Add(new MatchHistoryItemDto
+                {
+                    MatchId = row.GetValue<string>("match_id"),
+                    OpponentName = row.GetValue<string>("opponent_username"),
+                    Result = row.GetValue<string>("result"),
+                    Symbol = row.GetValue<string>("symbol"),
+                    PlayedAt = row.GetValue<DateTimeOffset>("played_at").DateTime,
+                    IsTournament = row.GetValue<bool>("is_tournament"),
+                    TournamentName = row.IsNull("tournament_name") ? null : row.GetValue<string>("tournament_name")
+                });
+            }
+
+            var mongoMatches = await _matchesCollection
+                .Find(m => (m.Player1Id == userId || m.Player2Id == userId) && m.Status == "Finished")
+                .SortByDescending(m => m.PlayedAt)
+                .ToListAsync();
+
+            if (mongoMatches.Count > 0)
+            {
+                var userIds = mongoMatches
+                    .SelectMany(match => new[] { match.Player1Id, match.Player2Id })
+                    .Where(id => !string.IsNullOrWhiteSpace(id) && id != "TBD")
+                    .Distinct()
+                    .ToList();
+
+                var users = await _usersCollection.Find(u => userIds.Contains(u.Id)).ToListAsync();
+                var usernames = users.ToDictionary(user => user.Id, user => user.Username);
+                var tournamentIds = mongoMatches
+                    .Where(match => !string.IsNullOrWhiteSpace(match.TournamentId))
+                    .Select(match => match.TournamentId!)
+                    .Distinct()
+                    .ToList();
+                var tournamentNames = tournamentIds.Count == 0
+                    ? new Dictionary<string, string>()
+                    : (await _tournamentsCollection.Find(t => tournamentIds.Contains(t.Id)).ToListAsync())
+                        .ToDictionary(t => t.Id, t => t.Name);
+
+                foreach (var match in mongoMatches)
+                {
+                    if (history.Any(item => item.MatchId == match.Id))
+                    {
+                        continue;
+                    }
+
+                    var isPlayerOne = match.Player1Id == userId;
+                    var opponentId = isPlayerOne ? match.Player2Id : match.Player1Id;
+                    var result = match.WinnerId == null
+                        ? "Nereseno"
+                        : match.WinnerId == userId
+                            ? "Pobeda"
+                            : "Poraz";
+
+                    history.Add(new MatchHistoryItemDto
+                    {
+                        MatchId = match.Id,
+                        OpponentName = usernames.GetValueOrDefault(opponentId, "Nepoznat protivnik"),
+                        Result = result,
+                        Symbol = isPlayerOne ? "X" : "O",
+                        PlayedAt = match.PlayedAt,
+                        IsTournament = !string.IsNullOrWhiteSpace(match.TournamentId),
+                        TournamentName = !string.IsNullOrWhiteSpace(match.TournamentId) && tournamentNames.TryGetValue(match.TournamentId!, out var tournamentName)
+                            ? tournamentName
+                            : null
+                    });
+                }
+            }
+
+            return history
+                .OrderByDescending(item => item.PlayedAt)
+                .ToList();
+        }
+
+        public async Task<List<MatchMoveDto>> GetMatchMovesAsync(string matchId)
+        {
+            var prepared = await _cassandra.PrepareAsync(
+                "SELECT moved_at, player_id, position, symbol FROM esports.moves_by_match WHERE match_id = ?");
+            var rows = await _cassandra.ExecuteAsync(prepared.Bind(matchId));
+            var moveRows = rows.ToList();
+
+            if (moveRows.Count == 0)
+            {
+                return new List<MatchMoveDto>();
+            }
+
+            var playerIds = moveRows
+                .Select(row => row.GetValue<string>("player_id"))
+                .Distinct()
+                .ToList();
+
+            var users = await _usersCollection.Find(user => playerIds.Contains(user.Id)).ToListAsync();
+            var usernames = users.ToDictionary(user => user.Id, user => user.Username);
+
+            return moveRows
+                .Select((row, index) => new MatchMoveDto
+                {
+                    MoveNumber = index + 1,
+                    PlayerName = usernames.GetValueOrDefault(row.GetValue<string>("player_id"), "Nepoznat igrac"),
+                    Symbol = row.GetValue<string>("symbol"),
+                    Position = row.GetValue<int>("position"),
+                    MovedAt = row.GetValue<DateTimeOffset>("moved_at").DateTime
+                })
+                .ToList();
         }
 
         public async Task<string> MakeMoveAsync(string matchId, string playerId, int position, string symbol, int clientVersion)
         {
             var db = _redis.GetDatabase();
-            var game = await GetGameStateAsync(matchId);
+            var moveLockKey = $"lock:match:{matchId}:move";
+            var moveLockValue = Guid.NewGuid().ToString();
 
-            if (game == null)
+            if (!await db.LockTakeAsync(moveLockKey, moveLockValue, TimeSpan.FromSeconds(3)))
             {
-                var mongoMatch = await _matchesCollection.Find(m => m.Id == matchId).FirstOrDefaultAsync();
-
-                if (mongoMatch == null) return "Greska: Mec nije pronadjen.";
-
-                await StartGameAsync(mongoMatch.Player1Id, mongoMatch.Player2Id, mongoMatch.Id, mongoMatch.TournamentId);
-                game = await GetGameStateAsync(matchId);
+                return "Greska: Mec se trenutno azurira. Pokusaj ponovo.";
             }
 
-            // --- FINESA 2: OPTIMISTIC CONCURRENCY (Atomska preciznost) ---
-            if (game.Version != clientVersion)
-                return $"Greska: Verzija se ne poklapa (Conflict). Osvezi tabelu. Backend: {game.Version}, Tvoj: {clientVersion}";
-
-            if (game.Status != "InProgress") return "Greska: Mec je zavrsen.";
-            if (game.CurrentTurn != symbol) return "Greska: Nije tvoj red.";
-            if (position < 0 || position > 8 || game.Board[position] != '_') return "Greska: Polje zauzeto.";
-
-            // --- FINESA 3: ANALITIKA BRZINE (Thinking Time) ---
-            var now = DateTime.UtcNow;
-            var lastMoveTicksStr = await db.HashGetAsync($"match_players:{matchId}", "LastMoveAt");
-            long durationMs = 0;
-            if (!lastMoveTicksStr.IsNullOrEmpty)
+            try
             {
-                var lastMoveAt = new DateTime(long.Parse(lastMoveTicksStr));
-                durationMs = (long)(now - lastMoveAt).TotalMilliseconds;
-            }
+                var game = await GetGameStateAsync(matchId);
 
-            // Izvrsi potez
-            char[] boardChars = game.Board.ToCharArray();
-            boardChars[position] = symbol[0];
-            game.Board = new string(boardChars);
+                if (game == null)
+                {
+                    var mongoMatch = await _matchesCollection.Find(m => m.Id == matchId).FirstOrDefaultAsync();
 
-            // CASSANDRA: Upis sa duration_ms
-            var insertMove = "INSERT INTO esports.moves (match_id, timestamp, player_id, position, symbol, duration_ms) VALUES (?, ?, ?, ?, ?, ?)";
-            var statement = await _cassandra.PrepareAsync(insertMove);
-            await _cassandra.ExecuteAsync(statement.Bind(matchId, now, playerId, position, symbol, durationMs));
+                    if (mongoMatch == null) return "Greska: Mec nije pronadjen.";
 
-            string winnerSymbol = CheckWinner(game.Board);
+                    await StartGameAsync(mongoMatch.Player1Id, mongoMatch.Player2Id, mongoMatch.Id, mongoMatch.TournamentId);
+                    game = await GetGameStateAsync(matchId);
+                }
 
-            if (winnerSymbol != null)
-            {
-                game.Status = winnerSymbol == "Draw" ? "Draw" : "Finished";
-                string resultText = winnerSymbol == "Draw" ? "Nereseno" : $"Pobednik: {symbol}";
+                // --- FINESA 2: OPTIMISTIC CONCURRENCY (Atomska preciznost) ---
+                if (game.Version != clientVersion)
+                    return $"Greska: Verzija se ne poklapa (Conflict). Osvezi tabelu. Backend: {game.Version}, Tvoj: {clientVersion}";
 
                 var p1Id = await db.HashGetAsync($"match_players:{matchId}", "P1");
                 var p2Id = await db.HashGetAsync($"match_players:{matchId}", "P2");
+                var expectedSymbol = playerId == p1Id.ToString()
+                    ? "X"
+                    : playerId == p2Id.ToString()
+                        ? "O"
+                        : null;
 
-                if (game.Status == "Finished")
+                if (expectedSymbol == null)
+                    return "Greska: Nisi ucesnik ovog meca.";
+
+                if (game.Status != "InProgress") return "Greska: Mec je zavrsen.";
+                if (symbol != expectedSymbol) return "Greska: Ne mozes igrati tudjim simbolom.";
+                if (game.CurrentTurn != expectedSymbol) return "Greska: Nije tvoj red.";
+                if (position < 0 || position > 8 || game.Board[position] != '_') return "Greska: Polje zauzeto.";
+
+                // --- FINESA 3: ANALITIKA BRZINE (Thinking Time) ---
+                var now = DateTime.UtcNow;
+                var lastMoveTicksStr = await db.HashGetAsync($"match_players:{matchId}", "LastMoveAt");
+                long durationMs = 0;
+                if (!lastMoveTicksStr.IsNullOrEmpty)
                 {
-                    await UpdateMongoStats(playerId, true);
-                    string loserId = (playerId == p1Id) ? p2Id.ToString() : p1Id.ToString();
-                    await UpdateMongoStats(loserId, false);
-
-                    // ==========================================
-                    // INTEGRACIJA SA TURNIROM (OVO JE TVOJA IDEJA!)
-                    // ==========================================
-                    if (!string.IsNullOrEmpty(game.TournamentId))
-                    {
-                        // AUTOMATSKI zovi koleginu metodu! Nema više ručnog kucanja u Swaggeru!
-                        bool advanceSuccess = await _tournamentService.AdvanceWinner(game.TournamentId, matchId, playerId);
-                        if (!advanceSuccess)
-                        {
-                            Console.WriteLine("KRITIČNO: Transakcija za turnir nije uspela!");
-                        }
-                    }
-                    // ==========================================
+                    var lastMoveAt = new DateTime(long.Parse(lastMoveTicksStr));
+                    durationMs = (long)(now - lastMoveAt).TotalMilliseconds;
                 }
 
-                // Cassandra upis
-                var endMatchQuery = "INSERT INTO esports.matches_history (match_id, played_at, result) VALUES (?, toTimestamp(now()), ?)";
-                var stEnd = await _cassandra.PrepareAsync(endMatchQuery);
-                await _cassandra.ExecuteAsync(stEnd.Bind(matchId, resultText));
+                // Izvrsi potez
+                char[] boardChars = game.Board.ToCharArray();
+                boardChars[position] = symbol[0];
+                game.Board = new string(boardChars);
 
-                // Brisanje iz Redisa
-                await db.KeyDeleteAsync($"match:{matchId}");
-                await db.KeyDeleteAsync($"match_players:{matchId}");
+                // CASSANDRA: Upis sa duration_ms
+                var insertMove = "INSERT INTO esports.moves_by_match (match_id, moved_at, move_id, player_id, position, symbol, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)";
+                var statement = await _cassandra.PrepareAsync(insertMove);
+                await _cassandra.ExecuteAsync(statement.Bind(matchId, now, Guid.NewGuid(), playerId, position, symbol, durationMs));
 
-                await _hubContext.Clients.Group(matchId).SendAsync("GameFinished", resultText, game.Board);
+                string winnerSymbol = CheckWinner(game.Board);
 
-                return $"Kraj! {resultText}.";
+                if (winnerSymbol != null)
+                {
+                    game.Status = winnerSymbol == "Draw" ? "Draw" : "Finished";
+                    game.Version += 1;
+                    string resultText = winnerSymbol == "Draw" ? "Nereseno" : $"Pobednik: {symbol}";
+
+                    if (game.Status == "Finished")
+                    {
+                        await UpdateMongoStats(playerId, true);
+                        string loserId = (playerId == p1Id) ? p2Id.ToString() : p1Id.ToString();
+                        await UpdateMongoStats(loserId, false);
+
+                        if (!string.IsNullOrEmpty(game.TournamentId))
+                        {
+                            bool advanceSuccess = await _tournamentService.AdvanceWinner(game.TournamentId, matchId, playerId);
+                            if (!advanceSuccess)
+                            {
+                                Console.WriteLine("KRITICNO: Transakcija za turnir nije uspela!");
+                            }
+                        }
+                    }
+
+                    var endMatchQuery = "INSERT INTO esports.matches_history_by_match (match_id, played_at, result) VALUES (?, toTimestamp(now()), ?)";
+                    var stEnd = await _cassandra.PrepareAsync(endMatchQuery);
+                    await _cassandra.ExecuteAsync(stEnd.Bind(matchId, resultText));
+
+                    await SaveMatchHistoryForPlayersAsync(
+                        matchId,
+                        now,
+                        p1Id.ToString(),
+                        p2Id.ToString(),
+                        winnerSymbol,
+                        game.TournamentId);
+
+                    var finishedMatchTtl = TimeSpan.FromMinutes(15);
+                    await db.StringSetAsync($"match:{matchId}", JsonSerializer.Serialize(game), finishedMatchTtl);
+                    await db.KeyExpireAsync($"match_players:{matchId}", finishedMatchTtl);
+                    await ClearActiveMatchIfCurrentAsync(db, p1Id.ToString(), matchId);
+                    await ClearActiveMatchIfCurrentAsync(db, p2Id.ToString(), matchId);
+
+                    await _realtimePublisher.PublishGameFinishedAsync(matchId, resultText, game.Board);
+
+                    return $"Kraj! {resultText}.";
+                }
+
+                game.CurrentTurn = symbol == "X" ? "O" : "X";
+                game.Version += 1;
+
+                await db.StringSetAsync($"match:{matchId}", JsonSerializer.Serialize(game), TimeSpan.FromMinutes(30));
+                await db.HashSetAsync($"match_players:{matchId}", "LastMoveAt", now.Ticks.ToString());
+
+                await _realtimePublisher.PublishMoveAsync(matchId, game);
+
+                return "Uspesan potez.";
             }
-
-            // Nastavak
-            game.CurrentTurn = symbol == "X" ? "O" : "X";
-            game.Version += 1; // Povecaj verziju za sledeci potez
-
-            // Azuriraj Redis sa novom verzijom i novim tajmstempom poslednjeg poteza
-            await db.StringSetAsync($"match:{matchId}", JsonSerializer.Serialize(game), TimeSpan.FromMinutes(30));
-            await db.HashSetAsync($"match_players:{matchId}", "LastMoveAt", now.Ticks.ToString());
-
-            await _hubContext.Clients.Group(matchId).SendAsync("ReceiveMove", game);
-
-            return "Uspesan potez.";
+            finally
+            {
+                await db.LockReleaseAsync(moveLockKey, moveLockValue);
+            }
         }
 
         private string CheckWinner(string b)
@@ -263,41 +418,43 @@ namespace EsportApi.Services
 
             // 7. CASSANDRA: Beleženje istorije napretka (Time-Series za grafikone)
             // Ovo je ključno za analizu napretka kroz godine
-            var progressQuery = "INSERT INTO esports.player_progress_history (user_id, timestamp, elo, coins, change_reason) VALUES (?, toTimestamp(now()), ?, ?, ?)";
+            var progressQuery = "INSERT INTO esports.player_progress_history_by_user (user_id, recorded_at, entry_id, elo, coins, change_reason) VALUES (?, toTimestamp(now()), ?, ?, ?, ?)";
             var preparedProgress = await _cassandra.PrepareAsync(progressQuery);
 
             // Upisujemo u Cassandru trenutni presek stanja nakon ovog meča
-            await _cassandra.ExecuteAsync(preparedProgress.Bind(userId, newElo, newCoins, "Match Result"));
+            await _cassandra.ExecuteAsync(preparedProgress.Bind(userId, Guid.NewGuid(), newElo, newCoins, "Match Result"));
         }
         public async Task<List<PlayerProgress>> GetPlayerProgressAsync(string userId)
         {
-            var list = new List<PlayerProgress>();
-            var query = "SELECT timestamp, elo, coins, change_reason FROM esports.player_progress_history WHERE user_id = ?";
-            var prepared = await _cassandra.PrepareAsync(query);
-            var rows = await _cassandra.ExecuteAsync(prepared.Bind(userId));
+            var progress = await ReadProgressHistoryAsync(
+                "SELECT recorded_at, elo, coins, change_reason FROM esports.player_progress_history_by_user WHERE user_id = ?",
+                "recorded_at",
+                userId);
 
-            foreach (var row in rows)
+            if (progress.Count > 0)
             {
-                list.Add(new PlayerProgress
-                {
-                    UserId = userId,
-                    Timestamp = row.GetValue<DateTimeOffset>("timestamp").DateTime,
-                    Elo = row.GetValue<int>("elo"),
-                    Coins = row.GetValue<int>("coins"),
-                    ChangeReason = row.GetValue<string>("change_reason")
-                });
+                return progress;
             }
-            return list;
+
+            return await ReadProgressHistoryAsync(
+                "SELECT timestamp, elo, coins, change_reason FROM esports.player_progress_history WHERE user_id = ?",
+                "timestamp",
+                userId);
         }
         public async Task SaveLeaderboardSnapshotAsync()
         {
             var db = _redis.GetDatabase();
 
             // Vučemo top 10 igrača iz Redisa (Order.Descending da bi prvi bio najbolji)
-            var topPlayers = await db.SortedSetRangeByRankWithScoresAsync("leaderboard", 0, 9, Order.Descending);
+            var topPlayers = await db.SortedSetRangeByRankWithScoresAsync("leaderboard_elo", 0, 9, Order.Descending);
+
+            if (topPlayers.Length == 0)
+            {
+                topPlayers = await db.SortedSetRangeByRankWithScoresAsync("leaderboard", 0, 9, Order.Descending);
+            }
 
             // Pripremamo upit za Cassandru
-            var query = "INSERT INTO esports.leaderboard_snapshots (date, score, player_id) VALUES (toDate(now()), ?, ?)";
+            var query = "INSERT INTO esports.leaderboard_snapshots_by_date (snapshot_date, score, player_id) VALUES (toDate(now()), ?, ?)";
             var prepared = await _cassandra.PrepareAsync(query);
 
             foreach (var player in topPlayers)
@@ -332,7 +489,8 @@ namespace EsportApi.Services
             await db.ListTrimAsync(chatKey, 0, 9);
             await db.KeyExpireAsync(chatKey, TimeSpan.FromMinutes(30));
 
-            // Vraćamo Username da bi SignalR znao ko je poslao poruku
+            await _realtimePublisher.PublishChatAsync(matchId, username, message);
+
             return username;
         }
 
@@ -345,6 +503,93 @@ namespace EsportApi.Services
 
             // Vraćamo ih kao listu stringova
             return messages.Select(m => m.ToString()).ToList();
+        }
+
+        private async Task<List<PlayerProgress>> ReadProgressHistoryAsync(string query, string timestampColumn, string userId)
+        {
+            var prepared = await _cassandra.PrepareAsync(query);
+            var rows = await _cassandra.ExecuteAsync(prepared.Bind(userId));
+            var list = new List<PlayerProgress>();
+
+            foreach (var row in rows)
+            {
+                list.Add(new PlayerProgress
+                {
+                    UserId = userId,
+                    Timestamp = row.GetValue<DateTimeOffset>(timestampColumn).DateTime,
+                    Elo = row.GetValue<int>("elo"),
+                    Coins = row.GetValue<int>("coins"),
+                    ChangeReason = row.GetValue<string>("change_reason")
+                });
+            }
+
+            return list;
+        }
+
+        private async Task SaveMatchHistoryForPlayersAsync(
+            string matchId,
+            DateTime playedAt,
+            string player1Id,
+            string player2Id,
+            string winnerSymbol,
+            string? tournamentId)
+        {
+            var playerIds = new[] { player1Id, player2Id };
+            var users = await _usersCollection.Find(user => playerIds.Contains(user.Id)).ToListAsync();
+            var usernames = users.ToDictionary(user => user.Id, user => user.Username);
+            string? tournamentName = null;
+
+            if (!string.IsNullOrWhiteSpace(tournamentId))
+            {
+                var tournament = await _tournamentsCollection.Find(t => t.Id == tournamentId).FirstOrDefaultAsync();
+                tournamentName = tournament?.Name;
+            }
+
+            var insertQuery = @"
+                INSERT INTO esports.matches_history_by_user
+                (user_id, played_at, match_id, opponent_id, opponent_username, result, symbol, is_tournament, tournament_name)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            var prepared = await _cassandra.PrepareAsync(insertQuery);
+
+            var player1Result = winnerSymbol == "Draw" ? "Nereseno" : winnerSymbol == "X" ? "Pobeda" : "Poraz";
+            var player2Result = winnerSymbol == "Draw" ? "Nereseno" : winnerSymbol == "O" ? "Pobeda" : "Poraz";
+
+            await _cassandra.ExecuteAsync(prepared.Bind(
+                player1Id,
+                playedAt,
+                matchId,
+                player2Id,
+                usernames.GetValueOrDefault(player2Id, "Nepoznat protivnik"),
+                player1Result,
+                "X",
+                !string.IsNullOrWhiteSpace(tournamentId),
+                tournamentName));
+
+            await _cassandra.ExecuteAsync(prepared.Bind(
+                player2Id,
+                playedAt,
+                matchId,
+                player1Id,
+                usernames.GetValueOrDefault(player1Id, "Nepoznat protivnik"),
+                player2Result,
+                "O",
+                !string.IsNullOrWhiteSpace(tournamentId),
+                tournamentName));
+        }
+
+        private static async Task ClearActiveMatchIfCurrentAsync(IDatabase db, string? userId, string matchId)
+        {
+            if (string.IsNullOrWhiteSpace(userId))
+            {
+                return;
+            }
+
+            var key = $"user_active_match:{userId}";
+            var activeMatch = await db.StringGetAsync(key);
+            if (activeMatch == matchId)
+            {
+                await db.KeyDeleteAsync(key);
+            }
         }
 
     }

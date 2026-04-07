@@ -17,8 +17,13 @@ namespace EsportApi.Services
         private readonly IMongoCollection<UserProfile> _usersCollection;
         private readonly IDatabase _redisDb;
         private readonly Cassandra.ISession _cassandra; // DODATO
+        private readonly IRedisRealtimePublisher _realtimePublisher;
 
-        public TournamentService(IMongoClient mongoClient, IConnectionMultiplexer redis, Cassandra.ISession cassandra)
+        public TournamentService(
+            IMongoClient mongoClient,
+            IConnectionMultiplexer redis,
+            Cassandra.ISession cassandra,
+            IRedisRealtimePublisher realtimePublisher)
         {
             _mongoClient = mongoClient;
             var db = _mongoClient.GetDatabase("EsportDb");
@@ -29,15 +34,7 @@ namespace EsportApi.Services
             _usersCollection = db.GetCollection<UserProfile>("Users");
             _redisDb = redis.GetDatabase();
             _cassandra = cassandra;
-
-            // Kreiramo tabelu za istoriju turnira
-            _cassandra.Execute(@"
-                CREATE TABLE IF NOT EXISTS esports.tournament_history (
-                tournament_id text PRIMARY KEY,
-                name text,
-                completed_at timestamp,
-                winner_id text
-            )");
+            _realtimePublisher = realtimePublisher;
         }
 
         public async Task<Tournament> CreateTournament(string name)
@@ -51,6 +48,11 @@ namespace EsportApi.Services
 
             await _tournamentsCollection.InsertOneAsync(tournament);
             return tournament;
+        }
+
+        public async Task<List<Tournament>> GetAllTournaments()
+        {
+            return await _tournamentsCollection.Find(_ => true).ToListAsync();
         }
 
         public async Task<Tournament?> GetTournament(string id)
@@ -86,6 +88,7 @@ namespace EsportApi.Services
         {
             using var session = await _mongoClient.StartSessionAsync();
             session.StartTransaction();
+            var matchesToInitialize = new List<Match>();
             try
             {
                 // 1. Zapiši ko je pobedio u trenutnom meču
@@ -135,9 +138,9 @@ namespace EsportApi.Services
                         await _redisDb.SortedSetAddAsync("leaderboard_elo", winnerId, newElo);
 
                         // C. CASSANDRA: Beležimo ogroman skok u istoriji progresa (za grafikon)
-                        var progQuery = "INSERT INTO esports.player_progress_history (user_id, timestamp, elo, coins, change_reason) VALUES (?, toTimestamp(now()), ?, ?, ?)";
+                        var progQuery = "INSERT INTO esports.player_progress_history_by_user (user_id, recorded_at, entry_id, elo, coins, change_reason) VALUES (?, toTimestamp(now()), ?, ?, ?, ?)";
                         var preparedProg = await _cassandra.PrepareAsync(progQuery);
-                        await _cassandra.ExecuteAsync(preparedProg.Bind(winnerId, newElo, newCoins, "Tournament Win"));
+                        await _cassandra.ExecuteAsync(preparedProg.Bind(winnerId, Guid.NewGuid(), newElo, newCoins, "Tournament Win"));
                     }
                     // ========================================================
 
@@ -145,7 +148,7 @@ namespace EsportApi.Services
                     await _tournamentsCollection.ReplaceOneAsync(session, tourFilter, tournament);
 
                     // CASSANDRA: Arhiviranje turnira u istoriju
-                    var query = "INSERT INTO esports.tournament_history (tournament_id, name, completed_at, winner_id) VALUES (?, ?, toTimestamp(now()), ?)";
+                    var query = "INSERT INTO esports.tournament_history_by_id (tournament_id, name, completed_at, winner_id) VALUES (?, ?, toTimestamp(now()), ?)";
                     var stmt = await _cassandra.PrepareAsync(query);
                     await _cassandra.ExecuteAsync(stmt.Bind(tournament.Id, tournament.Name, winnerId));
 
@@ -192,8 +195,13 @@ namespace EsportApi.Services
                     if (waitingMatch != null)
                     {
                         // Spajamo pobednika sa onim koji već čeka
-                        var updateWaitingMatch = Builders<Match>.Update.Set(m => m.Player2Id, winnerId);
+                        var updateWaitingMatch = Builders<Match>.Update
+                            .Set(m => m.Player2Id, winnerId)
+                            .Set(m => m.Status, "InProgress");
                         await _matchesCollection.UpdateOneAsync(session, m => m.Id == waitingMatch.Id, updateWaitingMatch);
+                        waitingMatch.Player2Id = winnerId;
+                        waitingMatch.Status = "InProgress";
+                        matchesToInitialize.Add(waitingMatch);
                     }
                     else
                     {
@@ -219,6 +227,12 @@ namespace EsportApi.Services
 
                 await session.CommitTransactionAsync();
                 await _redisDb.KeyDeleteAsync($"tournament:{tournamentId}");
+
+                foreach (var nextMatch in matchesToInitialize)
+                {
+                    await InitializeTournamentMatchAsync(nextMatch);
+                }
+
                 return true;
             }
             catch (Exception ex)
@@ -259,6 +273,7 @@ namespace EsportApi.Services
 
             using var session = await _mongoClient.StartSessionAsync();
             session.StartTransaction();
+            var matchesToInitialize = new List<Match>();
             try
             {
                 var matchIdsForRound1 = new List<string>();
@@ -271,12 +286,13 @@ namespace EsportApi.Services
                         Id = ObjectId.GenerateNewId().ToString(),
                         Player1Id = playerIds[i],
                         Player2Id = playerIds[i + 1],
-                        Status = "Pending", // Meč tek treba da se igra
+                        Status = "InProgress",
                         TournamentId = tournamentId
                     };
 
                     await _matchesCollection.InsertOneAsync(session, newMatch);
                     matchIdsForRound1.Add(newMatch.Id);
+                    matchesToInitialize.Add(newMatch);
                 }
 
                 // 2. Ažuriramo Turnir (Pravimo "Rundu 1")
@@ -322,6 +338,11 @@ namespace EsportApi.Services
 
                 // 4. OBAVEZNO: Brišemo keš iz Redisa jer se turnir promenio!
                 await _redisDb.KeyDeleteAsync($"tournament:{tournamentId}");
+
+                foreach (var match in matchesToInitialize)
+                {
+                    await InitializeTournamentMatchAsync(match);
+                }
 
                 return true;
             }
@@ -379,6 +400,58 @@ namespace EsportApi.Services
             };
 
             return result;
+        }
+
+        private async Task InitializeTournamentMatchAsync(Match match)
+        {
+            if (string.IsNullOrWhiteSpace(match.Player1Id) ||
+                string.IsNullOrWhiteSpace(match.Player2Id) ||
+                match.Player2Id == "TBD")
+            {
+                return;
+            }
+
+            var liveMatch = new TicTacToeGame
+            {
+                Id = match.Id,
+                TournamentId = match.TournamentId,
+                Board = "_________",
+                CurrentTurn = "X",
+                Status = "InProgress",
+                Version = 1,
+                Player1Id = match.Player1Id,
+                Player2Id = match.Player2Id
+            };
+
+            var ttl = TimeSpan.FromMinutes(30);
+            var now = DateTime.UtcNow;
+
+            await _redisDb.HashSetAsync($"match_players:{match.Id}", new HashEntry[]
+            {
+                new HashEntry("P1", match.Player1Id),
+                new HashEntry("P2", match.Player2Id),
+                new HashEntry("LastMoveAt", now.Ticks.ToString())
+            });
+
+            await _redisDb.StringSetAsync($"match:{match.Id}", JsonSerializer.Serialize(liveMatch), ttl);
+            await _redisDb.StringSetAsync($"user_active_match:{match.Player1Id}", match.Id, ttl);
+            await _redisDb.StringSetAsync($"user_active_match:{match.Player2Id}", match.Id, ttl);
+
+            var users = await _usersCollection.Find(u => u.Id == match.Player1Id || u.Id == match.Player2Id).ToListAsync();
+            var player1 = users.FirstOrDefault(u => u.Id == match.Player1Id);
+            var player2 = users.FirstOrDefault(u => u.Id == match.Player2Id);
+
+            if (player1 != null && player2 != null)
+            {
+                await _realtimePublisher.PublishMatchFoundAsync(new MatchFoundDto
+                {
+                    MatchId = match.Id,
+                    Player1 = player1.Username,
+                    Player2 = player2.Username,
+                    Player1Id = player1.Id,
+                    Player2Id = player2.Id
+                });
+            }
         }
     }
 }

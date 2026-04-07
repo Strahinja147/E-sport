@@ -1,8 +1,7 @@
-﻿using Cassandra;
+using Cassandra;
 using EsportApi.Models;
 using EsportApi.Models.DTOs;
 using EsportApi.Services.Interfaces;
-using MongoDB.Bson;
 using MongoDB.Driver;
 using StackExchange.Redis;
 
@@ -19,17 +18,6 @@ namespace EsportApi.Services
             _mongo = mongo;
             _redis = redis;
             _cassandra = cassandra;
-
-            _cassandra.Execute(@"
-            CREATE TABLE IF NOT EXISTS esports.purchase_logs (
-                year_month text,
-                purchased_at timestamp,
-                user_id text,
-                item_id text,
-                item_name text,
-                price int,
-                PRIMARY KEY (year_month, purchased_at)
-            ) WITH CLUSTERING ORDER BY (purchased_at DESC)");
         }
 
         public async Task<string> BuyItemAsync(string userId, string itemId)
@@ -38,9 +26,10 @@ namespace EsportApi.Services
             var lockKey = $"lock:shop:{itemId}";
             var stockKey = $"item_stock:{itemId}";
 
-            // 1. REDIS LOCK
             if (!await db.LockTakeAsync(lockKey, "shop_lock", TimeSpan.FromSeconds(15)))
+            {
                 return "Sistem je preopterećen, pokušaj ponovo.";
+            }
 
             try
             {
@@ -49,32 +38,35 @@ namespace EsportApi.Services
                 var users = dbMongo.GetCollection<UserProfile>("Users");
 
                 var item = await shopItems.Find(i => i.Id == itemId).FirstOrDefaultAsync();
-                if (item == null) return "Predmet ne postoji.";
-
-                // --- NADOGRADNJA 1: PROVERA DUPLIKATA (CASSANDRA) ---
-                // Ne dozvoljavamo istom igraču da kupi dva ista Limited itema
-                if (item.IsLimited)
+                if (item == null)
                 {
-                    // Koristimo tvoj InventoryService da vidimo da li vec ima taj itemID
-                    var alreadyOwned = await HasItemInCassandra(userId, itemId);
-                    if (alreadyOwned) return "Već poseduješ ovaj limitirani predmet!";
+                    return "Predmet ne postoji.";
                 }
 
-                // 2. REDIS: PROVERA ZALIHA
+                if (item.IsLimited)
+                {
+                    var alreadyOwned = await HasItemInCassandra(userId, itemId);
+                    if (alreadyOwned)
+                    {
+                        return "Već poseduješ ovaj limitirani predmet!";
+                    }
+                }
+
                 if (item.IsLimited)
                 {
                     var currentStock = await db.StringGetAsync(stockKey);
                     if (currentStock.IsNull)
                     {
-                        await db.StringSetAsync(stockKey, item.CurrentStock); // Inicijalizuj iz Monga ako ga nema u Redisu
+                        await db.StringSetAsync(stockKey, item.CurrentStock);
                         currentStock = item.CurrentStock;
                     }
 
                     if (int.Parse(currentStock!) <= 0)
+                    {
                         return "RASPRODATO!";
+                    }
                 }
 
-                // 3. MONGODB: TRANSAKCIJA
                 using var session = await _mongo.StartSessionAsync();
                 session.StartTransaction();
                 try
@@ -88,13 +80,15 @@ namespace EsportApi.Services
                         return "Nemaš dovoljno novčića.";
                     }
 
-                    // Skidamo pare korisniku
-                    await users.UpdateOneAsync(session, userFilter, Builders<UserProfile>.Update.Inc(u => u.Coins, -item.Price));
+                    await users.UpdateOneAsync(
+                        session,
+                        userFilter,
+                        Builders<UserProfile>.Update.Inc(u => u.Coins, -item.Price));
 
-                    // --- NADOGRADNJA 2: AŽURIRANJE ZALIHA U MONGODB-u ---
                     if (item.IsLimited)
                     {
-                        await shopItems.UpdateOneAsync(session,
+                        await shopItems.UpdateOneAsync(
+                            session,
                             Builders<ShopItem>.Filter.Eq(i => i.Id, itemId),
                             Builders<ShopItem>.Update.Inc(i => i.CurrentStock, -1));
                     }
@@ -107,36 +101,112 @@ namespace EsportApi.Services
                     return "Greška u transakciji.";
                 }
 
-                // 4. REDIS: Smanjenje zaliha u memoriji
-                if (item.IsLimited) await db.StringDecrementAsync(stockKey);
+                if (item.IsLimited)
+                {
+                    await db.StringDecrementAsync(stockKey);
+                }
 
-                // 5. CASSANDRA: Upis (Inventar + Log)
-                var invQuery = "INSERT INTO esports.inventory (user_id, item_id, item_name, purchased_at) VALUES (?, ?, ?, toTimestamp(now()))";
-                await _cassandra.ExecuteAsync((await _cassandra.PrepareAsync(invQuery)).Bind(userId, itemId, item.Name));
+                var purchasedAt = DateTime.UtcNow;
+                var monthKey = purchasedAt.ToString("yyyy-MM");
+                var purchaseId = Guid.NewGuid();
 
-                var logQuery = "INSERT INTO esports.purchase_logs (year_month, purchased_at, user_id, item_id, item_name, price) VALUES (?, toTimestamp(now()), ?, ?, ?, ?)";
-                await _cassandra.ExecuteAsync((await _cassandra.PrepareAsync(logQuery)).Bind(DateTime.UtcNow.ToString("yyyy-MM"), userId, itemId, item.Name, item.Price));
+                var inventoryByUserQuery =
+                    "INSERT INTO esports.inventory_by_user (user_id, purchased_at, item_id, item_name, purchase_price) VALUES (?, ?, ?, ?, ?)";
+                await _cassandra.ExecuteAsync(
+                    (await _cassandra.PrepareAsync(inventoryByUserQuery)).Bind(userId, purchasedAt, itemId, item.Name, item.Price));
+
+                var inventoryLookupQuery =
+                    "INSERT INTO esports.inventory_items_by_user (user_id, item_id, item_name, purchased_at, purchase_price) VALUES (?, ?, ?, ?, ?)";
+                await _cassandra.ExecuteAsync(
+                    (await _cassandra.PrepareAsync(inventoryLookupQuery)).Bind(userId, itemId, item.Name, purchasedAt, item.Price));
+
+                var logQuery =
+                    "INSERT INTO esports.purchase_logs_by_month (year_month, purchased_at, purchase_id, user_id, item_id, item_name, price) VALUES (?, ?, ?, ?, ?, ?, ?)";
+                await _cassandra.ExecuteAsync(
+                    (await _cassandra.PrepareAsync(logQuery)).Bind(monthKey, purchasedAt, purchaseId, userId, itemId, item.Name, item.Price));
 
                 return "USPEŠNO! Predmet je u tvom inventaru.";
             }
-            catch (Exception ex) { return $"Greska: {ex.Message}"; }
-            finally { await db.LockReleaseAsync(lockKey, "shop_lock"); }
+            catch (Exception ex)
+            {
+                return $"Greska: {ex.Message}";
+            }
+            finally
+            {
+                await db.LockReleaseAsync(lockKey, "shop_lock");
+            }
         }
 
-        // Pomoćna metoda za proveru u Cassandri
-        private async Task<bool> HasItemInCassandra(string userId, string itemId)
+        public async Task<string> SellItemAsync(string userId, string itemId, DateTime purchasedAt)
         {
-            var query = "SELECT item_id FROM esports.inventory WHERE user_id = ? AND item_id = ? ALLOW FILTERING";
-            var prepared = await _cassandra.PrepareAsync(query);
-            var result = await _cassandra.ExecuteAsync(prepared.Bind(userId, itemId));
-            return result.FirstOrDefault() != null;
+            var dbMongo = _mongo.GetDatabase("EsportDb");
+            var users = dbMongo.GetCollection<UserProfile>("Users");
+            var shopItems = dbMongo.GetCollection<ShopItem>("ShopItems");
+
+            var normalizedPurchasedAt = DateTime.SpecifyKind(purchasedAt, DateTimeKind.Utc);
+            var inventoryRow = await GetInventoryRowAsync(userId, itemId, normalizedPurchasedAt);
+            if (inventoryRow == null)
+            {
+                return "Predmet nije pronađen u inventaru.";
+            }
+
+            var purchasePrice = inventoryRow.PurchasePrice;
+            if (purchasePrice <= 0)
+            {
+                var fallbackItem = await shopItems.Find(item => item.Id == itemId).FirstOrDefaultAsync();
+                purchasePrice = fallbackItem?.Price ?? 0;
+            }
+
+            if (purchasePrice <= 0)
+            {
+                return "Cena predmeta nije dostupna za prodaju.";
+            }
+
+            var resalePrice = (int)Math.Floor(purchasePrice * 0.9m);
+            if (resalePrice <= 0)
+            {
+                return "Predmet nema dovoljnu vrednost za prodaju.";
+            }
+
+            await users.UpdateOneAsync(
+                profile => profile.Id == userId,
+                Builders<UserProfile>.Update.Inc(profile => profile.Coins, resalePrice));
+
+            if (inventoryRow.Source == InventorySource.Current)
+            {
+                var deleteCurrent = await _cassandra.PrepareAsync(
+                    "DELETE FROM esports.inventory_by_user WHERE user_id = ? AND purchased_at = ? AND item_id = ?");
+                await _cassandra.ExecuteAsync(deleteCurrent.Bind(userId, normalizedPurchasedAt, itemId));
+            }
+            else
+            {
+                var deleteLegacy = await _cassandra.PrepareAsync(
+                    "DELETE FROM esports.inventory WHERE user_id = ? AND purchased_at = ? AND item_id = ?");
+                await _cassandra.ExecuteAsync(deleteLegacy.Bind(userId, normalizedPurchasedAt, itemId));
+            }
+
+            var hasMoreCurrent = await UserStillOwnsItemAsync(
+                "SELECT item_id FROM esports.inventory_by_user WHERE user_id = ?",
+                userId,
+                itemId);
+            var hasMoreLegacy = await UserStillOwnsItemAsync(
+                "SELECT item_id FROM esports.inventory WHERE user_id = ?",
+                userId,
+                itemId);
+
+            if (!hasMoreCurrent && !hasMoreLegacy)
+            {
+                var deleteLookup = await _cassandra.PrepareAsync(
+                    "DELETE FROM esports.inventory_items_by_user WHERE user_id = ? AND item_id = ?");
+                await _cassandra.ExecuteAsync(deleteLookup.Bind(userId, itemId));
+            }
+
+            return $"USPEŠNO! Predmet je prodat za {resalePrice} coins.";
         }
 
         public async Task<MonthlyReportDto> GetMonthlyRevenueReportAsync(string yearMonth)
         {
-            var query = "SELECT item_name, price FROM esports.purchase_logs WHERE year_month = ?";
-            var prepared = await _cassandra.PrepareAsync(query);
-            var rows = await _cassandra.ExecuteAsync(prepared.Bind(yearMonth));
+            var rows = await ReadPurchaseRowsAsync(yearMonth, "SELECT item_name, price FROM esports.purchase_logs_by_month WHERE year_month = ?");
 
             int totalRevenue = 0;
             var itemCounts = new Dictionary<string, int>();
@@ -146,17 +216,18 @@ namespace EsportApi.Services
                 int price = row.GetValue<int>("price");
                 string itemName = row.GetValue<string>("item_name");
 
-                // 1. Sabiramo ukupnu zaradu
                 totalRevenue += price;
 
-                // 2. Brojimo prodaju svakog artikla
                 if (itemCounts.ContainsKey(itemName))
+                {
                     itemCounts[itemName]++;
+                }
                 else
+                {
                     itemCounts[itemName] = 1;
+                }
             }
 
-            // Pronalazimo artikal sa najvećim brojem prodaja
             var bestSelling = itemCounts.OrderByDescending(x => x.Value).FirstOrDefault();
 
             return new MonthlyReportDto
@@ -167,11 +238,10 @@ namespace EsportApi.Services
                 SalesCount = bestSelling.Value
             };
         }
+
         public async Task<int> GetMonthlyRevenueAsync(string yearMonth)
         {
-            var query = "SELECT price FROM esports.purchase_logs WHERE year_month = ?";
-            var prepared = await _cassandra.PrepareAsync(query);
-            var rows = await _cassandra.ExecuteAsync(prepared.Bind(yearMonth));
+            var rows = await ReadPurchaseRowsAsync(yearMonth, "SELECT price FROM esports.purchase_logs_by_month WHERE year_month = ?");
             return rows.Sum(r => r.GetValue<int>("price"));
         }
 
@@ -184,6 +254,99 @@ namespace EsportApi.Services
         public async Task<List<ShopItem>> GetAllItemsAsync()
         {
             return await _mongo.GetDatabase("EsportDb").GetCollection<ShopItem>("ShopItems").Find(_ => true).ToListAsync();
+        }
+
+        private async Task<bool> HasItemInCassandra(string userId, string itemId)
+        {
+            var query = "SELECT item_id FROM esports.inventory_items_by_user WHERE user_id = ? AND item_id = ?";
+            var prepared = await _cassandra.PrepareAsync(query);
+            var result = await _cassandra.ExecuteAsync(prepared.Bind(userId, itemId));
+            if (result.FirstOrDefault() != null)
+            {
+                return true;
+            }
+
+            var inventoryByUserPrepared = await _cassandra.PrepareAsync(
+                "SELECT item_id FROM esports.inventory_by_user WHERE user_id = ?");
+            var inventoryByUserRows = await _cassandra.ExecuteAsync(inventoryByUserPrepared.Bind(userId));
+            if (inventoryByUserRows.Any(row => row.GetValue<string>("item_id") == itemId))
+            {
+                return true;
+            }
+
+            var legacyQuery = "SELECT item_id FROM esports.inventory WHERE user_id = ?";
+            var legacyPrepared = await _cassandra.PrepareAsync(legacyQuery);
+            var legacyRows = await _cassandra.ExecuteAsync(legacyPrepared.Bind(userId));
+            return legacyRows.Any(row => row.GetValue<string>("item_id") == itemId);
+        }
+
+        private async Task<InventoryRow?> GetInventoryRowAsync(string userId, string itemId, DateTime purchasedAt)
+        {
+            var currentPrepared = await _cassandra.PrepareAsync(
+                "SELECT item_name, purchase_price FROM esports.inventory_by_user WHERE user_id = ? AND purchased_at = ? AND item_id = ?");
+            var currentRows = await _cassandra.ExecuteAsync(currentPrepared.Bind(userId, purchasedAt, itemId));
+            var currentRow = currentRows.FirstOrDefault();
+
+            if (currentRow != null)
+            {
+                return new InventoryRow
+                {
+                    ItemName = currentRow.GetValue<string>("item_name"),
+                    PurchasePrice = currentRow.IsNull("purchase_price") ? 0 : currentRow.GetValue<int>("purchase_price"),
+                    Source = InventorySource.Current
+                };
+            }
+
+            var legacyPrepared = await _cassandra.PrepareAsync(
+                "SELECT item_name FROM esports.inventory WHERE user_id = ? AND purchased_at = ? AND item_id = ?");
+            var legacyRows = await _cassandra.ExecuteAsync(legacyPrepared.Bind(userId, purchasedAt, itemId));
+            var legacyRow = legacyRows.FirstOrDefault();
+
+            if (legacyRow == null)
+            {
+                return null;
+            }
+
+            return new InventoryRow
+            {
+                ItemName = legacyRow.GetValue<string>("item_name"),
+                PurchasePrice = 0,
+                Source = InventorySource.Legacy
+            };
+        }
+
+        private async Task<bool> UserStillOwnsItemAsync(string query, string userId, string itemId)
+        {
+            var prepared = await _cassandra.PrepareAsync(query);
+            var rows = await _cassandra.ExecuteAsync(prepared.Bind(userId));
+            return rows.Any(row => row.GetValue<string>("item_id") == itemId);
+        }
+
+        private async Task<RowSet> ReadPurchaseRowsAsync(string yearMonth, string primaryQuery)
+        {
+            var prepared = await _cassandra.PrepareAsync(primaryQuery);
+            var rows = await _cassandra.ExecuteAsync(prepared.Bind(yearMonth));
+
+            if (rows.Any())
+            {
+                return rows;
+            }
+
+            var legacyPrepared = await _cassandra.PrepareAsync("SELECT item_name, price FROM esports.purchase_logs WHERE year_month = ?");
+            return await _cassandra.ExecuteAsync(legacyPrepared.Bind(yearMonth));
+        }
+
+        private sealed class InventoryRow
+        {
+            public required string ItemName { get; set; }
+            public int PurchasePrice { get; set; }
+            public InventorySource Source { get; set; }
+        }
+
+        private enum InventorySource
+        {
+            Current,
+            Legacy
         }
     }
 }

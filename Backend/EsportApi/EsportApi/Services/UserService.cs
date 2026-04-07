@@ -1,17 +1,20 @@
-﻿using EsportApi.Models;
+using EsportApi.Models;
 using EsportApi.Services.Interfaces;
 using MongoDB.Driver;
+using StackExchange.Redis;
 
 namespace EsportApi.Services
 {
     public class UserService : IUserService
     {
         private readonly IMongoCollection<UserProfile> _usersCollection;
+        private readonly IDatabase _redisDb;
 
-        public UserService(IMongoClient mongoClient)
+        public UserService(IMongoClient mongoClient, IConnectionMultiplexer redis)
         {
             var db = mongoClient.GetDatabase("EsportDb");
             _usersCollection = db.GetCollection<UserProfile>("Users");
+            _redisDb = redis.GetDatabase();
         }
 
         public async Task<bool> SendFriendRequest(string senderId, string receiverId)
@@ -21,38 +24,69 @@ namespace EsportApi.Services
 
             if (sender == null || receiver == null) throw new Exception("Jedan od korisnika ne postoji!");
 
-            // Provera da li su već prijatelji
             if (sender.Friends.Any(f => f.UserId == receiverId))
-                throw new Exception("Zahtev je već poslat ili ste već prijatelji!");
+                throw new Exception("Zahtev je vec poslat ili ste vec prijatelji!");
 
-            // 1. Dodajemo receivera u listu kod sendera (kao Pending)
-            var friendForSender = new Friend { UserId = receiver.Id, Username = receiver.Username, Status = "Pending" };
+            var friendForSender = new Friend
+            {
+                UserId = receiver.Id,
+                Username = receiver.Username,
+                Status = "Pending",
+                RequestedByUserId = sender.Id
+            };
             var updateSender = Builders<UserProfile>.Update.Push(u => u.Friends, friendForSender);
             await _usersCollection.UpdateOneAsync(u => u.Id == senderId, updateSender);
 
-            // 2. Dodajemo sendera u listu kod receivera (kao Pending)
-            var friendForReceiver = new Friend { UserId = sender.Id, Username = sender.Username, Status = "Pending" };
+            var friendForReceiver = new Friend
+            {
+                UserId = sender.Id,
+                Username = sender.Username,
+                Status = "Pending",
+                RequestedByUserId = sender.Id
+            };
             var updateReceiver = Builders<UserProfile>.Update.Push(u => u.Friends, friendForReceiver);
             await _usersCollection.UpdateOneAsync(u => u.Id == receiverId, updateReceiver);
 
             return true;
         }
 
+        public async Task<bool> SendFriendRequestByUsername(string senderId, string username)
+        {
+            var cleanedUsername = username.Trim();
+            if (string.IsNullOrWhiteSpace(cleanedUsername))
+            {
+                throw new Exception("Korisnicko ime je obavezno.");
+            }
+
+            var sender = await _usersCollection.Find(u => u.Id == senderId).FirstOrDefaultAsync();
+            if (sender == null)
+            {
+                throw new Exception("Posiljalac ne postoji.");
+            }
+
+            var receiver = await _usersCollection.Find(u => u.Username.ToLower() == cleanedUsername.ToLower()).FirstOrDefaultAsync();
+            if (receiver == null)
+            {
+                throw new Exception("Korisnik sa tim korisnickim imenom ne postoji.");
+            }
+
+            if (receiver.Id == senderId)
+            {
+                throw new Exception("Ne mozes poslati zahtev samom sebi.");
+            }
+
+            return await SendFriendRequest(senderId, receiver.Id);
+        }
+
         public async Task<bool> AcceptFriendRequest(string receiverId, string senderId)
         {
-            // OVO JE PROFESORSKI KOD: Korišćenje "Positional Operator-a" ($)
-            // Želimo da promenimo Status u "Accepted", ali samo za TAČNO ODREĐENOG prijatelja u nizu!
-
-            // 1. Ažuriramo primaoca
             var receiverFilter = Builders<UserProfile>.Filter.And(
                 Builders<UserProfile>.Filter.Eq(u => u.Id, receiverId),
-                Builders<UserProfile>.Filter.ElemMatch(u => u.Friends, f => f.UserId == senderId) // Nalazimo onog u nizu
+                Builders<UserProfile>.Filter.ElemMatch(u => u.Friends, f => f.UserId == senderId)
             );
-            // $ znak u MongoDB-u znači "onaj element u nizu koji je filter pronašao"
             var receiverUpdate = Builders<UserProfile>.Update.Set("Friends.$.Status", "Accepted");
             await _usersCollection.UpdateOneAsync(receiverFilter, receiverUpdate);
 
-            // 2. Ažuriramo pošiljaoca
             var senderFilter = Builders<UserProfile>.Filter.And(
                 Builders<UserProfile>.Filter.Eq(u => u.Id, senderId),
                 Builders<UserProfile>.Filter.ElemMatch(u => u.Friends, f => f.UserId == receiverId)
@@ -73,15 +107,37 @@ namespace EsportApi.Services
             return await RemoveFriendship(myUserId, friendId);
         }
 
-        // PRIVATNA METODA: Radi isti posao za oba slučaja (Briše vezu kod oba igrača)
+        public async Task<List<string>> GetOnlineFriendIds(string userId)
+        {
+            var user = await _usersCollection.Find(u => u.Id == userId).FirstOrDefaultAsync();
+            if (user == null)
+            {
+                return new List<string>();
+            }
+
+            var acceptedFriendIds = user.Friends
+                .Where(friend => friend.Status == "Accepted")
+                .Select(friend => friend.UserId)
+                .Distinct()
+                .ToList();
+
+            var onlineFriendIds = new List<string>();
+            foreach (var friendId in acceptedFriendIds)
+            {
+                if (await _redisDb.SetContainsAsync("online_players", friendId))
+                {
+                    onlineFriendIds.Add(friendId);
+                }
+            }
+
+            return onlineFriendIds;
+        }
+
         private async Task<bool> RemoveFriendship(string userId1, string userId2)
         {
-            // 1. Brišemo userId2 iz liste kod userId1
-            // PullFilter traži element u nizu Friends gde je UserId jednak onome koga brišemo
             var update1 = Builders<UserProfile>.Update.PullFilter(u => u.Friends, f => f.UserId == userId2);
             await _usersCollection.UpdateOneAsync(u => u.Id == userId1, update1);
 
-            // 2. Brišemo userId1 iz liste kod userId2
             var update2 = Builders<UserProfile>.Update.PullFilter(u => u.Friends, f => f.UserId == userId1);
             await _usersCollection.UpdateOneAsync(u => u.Id == userId2, update2);
 

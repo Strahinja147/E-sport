@@ -1,8 +1,6 @@
 ﻿using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.AspNetCore.SignalR;
-using EsportApi.Hubs;
 using EsportApi.Services.Interfaces;
 
 namespace EsportApi.Services.Workers
@@ -29,7 +27,7 @@ namespace EsportApi.Services.Workers
                     using var scope = _scopeFactory.CreateScope();
                     var matchService = scope.ServiceProvider.GetRequiredService<IMatchmakingService>();
                     var tourService = scope.ServiceProvider.GetRequiredService<ITournamentService>();
-                    var hubContext = scope.ServiceProvider.GetRequiredService<IHubContext<GameHub>>();
+                    var realtimePublisher = scope.ServiceProvider.GetRequiredService<IRedisRealtimePublisher>();
 
                     // ZA TESTIRANJE: Tražimo 4 igrača (Polufinale -> Finale)
                     // U realnosti bi ovde stajalo 8 ili 16
@@ -48,8 +46,7 @@ namespace EsportApi.Services.Workers
 
                         _logger.LogInformation($"[TOURNAMENT STARTED] ID: {tournament.Id}");
 
-                        // 3. SIGNALR: Javljamo igračima da je turnir napravljen i da osveže bracket!
-                        await hubContext.Clients.All.SendAsync("TournamentStarted", tournament.Id, readyPlayers);
+                        await realtimePublisher.PublishTournamentStartedAsync(tournament.Id, readyPlayers);
                     }
                 }
                 catch (Exception ex)
