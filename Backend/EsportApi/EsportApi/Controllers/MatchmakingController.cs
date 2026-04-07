@@ -1,7 +1,5 @@
-using EsportApi.Models;
 using EsportApi.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
-using MongoDB.Driver;
 
 namespace EsportApi.Controllers
 {
@@ -10,17 +8,10 @@ namespace EsportApi.Controllers
     public class MatchmakingController : ControllerBase
     {
         private readonly IMatchmakingService _matchService;
-        private readonly IMongoClient _mongoClient;
-        private readonly ICassandraAuthService _authService;
 
-        public MatchmakingController(
-            IMatchmakingService matchService,
-            IMongoClient mongoClient,
-            ICassandraAuthService authService)
+        public MatchmakingController(IMatchmakingService matchService)
         {
             _matchService = matchService;
-            _mongoClient = mongoClient;
-            _authService = authService;
         }
 
         [HttpPost("join")]
@@ -58,64 +49,6 @@ namespace EsportApi.Controllers
         {
             var board = await _matchService.GetTopPlayers(count);
             return Ok(board);
-        }
-
-        [HttpPost("seed-users")]
-        public async Task<IActionResult> SeedUsers(string username, string? email = null, string? password = null)
-        {
-            var collection = _mongoClient.GetDatabase("EsportDb").GetCollection<UserProfile>("Users");
-            var normalizedUsername = username.Trim();
-            var normalizedEmail = _authService.NormalizeEmail(
-                string.IsNullOrWhiteSpace(email) ? $"{normalizedUsername.ToLowerInvariant()}@pulse-arena.local" : email);
-            var effectivePassword = string.IsNullOrWhiteSpace(password) ? "Test123!" : password;
-
-            if (string.IsNullOrWhiteSpace(normalizedUsername))
-            {
-                return BadRequest("Korisnicko ime je obavezno.");
-            }
-
-            var existingUser = await collection.Find(u => u.Username.ToLower() == normalizedUsername.ToLower()).FirstOrDefaultAsync();
-            if (existingUser != null)
-            {
-                return BadRequest("Korisnik sa tim imenom vec postoji.");
-            }
-
-            if (await _authService.EmailExistsAsync(normalizedEmail))
-            {
-                return BadRequest("Nalog sa tim email-om vec postoji.");
-            }
-
-            var newUser = new UserProfile
-            {
-                Id = MongoDB.Bson.ObjectId.GenerateNewId().ToString(),
-                Username = normalizedUsername
-            };
-
-            await collection.InsertOneAsync(newUser);
-
-            try
-            {
-                await _authService.RegisterAsync(normalizedEmail, newUser.Id, newUser.Username, effectivePassword);
-            }
-            catch
-            {
-                await collection.DeleteOneAsync(u => u.Id == newUser.Id);
-                throw;
-            }
-
-            return Ok(new
-            {
-                User = newUser,
-                Email = normalizedEmail,
-                TemporaryPassword = effectivePassword
-            });
-        }
-
-        [HttpPost("sync")]
-        public async Task<IActionResult> Sync()
-        {
-            await _matchService.SyncLeaderboardAsync();
-            return Ok("Svi igraci su prebaceni u Redis Leaderboard!");
         }
 
         [HttpPost("join-tournament")]

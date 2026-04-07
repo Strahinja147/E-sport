@@ -8,19 +8,10 @@ namespace EsportApi.Controllers
     public class GameController : ControllerBase
     {
         private readonly IGameService _gameService;
-        private readonly IMatchmakingService _matchmakingService;
 
-        public GameController(IGameService gameService, IMatchmakingService matchmakingService)
+        public GameController(IGameService gameService)
         {
             _gameService = gameService;
-            _matchmakingService = matchmakingService;
-        }
-
-        [HttpPost("start")]
-        public async Task<IActionResult> Start(string p1, string p2, string? matchId = null, string? tournamentId = null)
-        {
-            var newMatchId = await _gameService.StartGameAsync(p1, p2, matchId, tournamentId);
-            return Ok(new { MatchId = newMatchId });
         }
 
         [HttpGet("{matchId}")]

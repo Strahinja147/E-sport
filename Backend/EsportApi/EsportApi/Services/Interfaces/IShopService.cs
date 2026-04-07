@@ -7,8 +7,6 @@ namespace EsportApi.Services.Interfaces
     {
         Task<string> BuyItemAsync(string userId, string itemId);
         Task<string> SellItemAsync(string userId, string itemId, DateTime purchasedAt);
-        Task<int> GetMonthlyRevenueAsync(string yearMonth);
-        Task AddCoinsAsync(string userId, int amount);
         Task<MonthlyReportDto> GetMonthlyRevenueReportAsync(string yearMonth);
         Task<List<ShopItem>> GetAllItemsAsync();
     }

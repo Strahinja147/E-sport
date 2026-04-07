@@ -27,13 +27,6 @@ namespace EsportApi.Services
                 ) WITH CLUSTERING ORDER BY (moved_at ASC, move_id ASC)");
 
             _cassandra.Execute(@"
-                CREATE TABLE IF NOT EXISTS esports.matches_history_by_match (
-                    match_id text PRIMARY KEY,
-                    played_at timestamp,
-                    result text
-                )");
-
-            _cassandra.Execute(@"
                 CREATE TABLE IF NOT EXISTS esports.matches_history_by_user (
                     user_id text,
                     played_at timestamp,
@@ -113,14 +106,6 @@ namespace EsportApi.Services
                     item_name text,
                     purchased_at timestamp,
                     PRIMARY KEY ((user_id), item_id)
-                )");
-
-            _cassandra.Execute(@"
-                CREATE TABLE IF NOT EXISTS esports.tournament_history_by_id (
-                    tournament_id text PRIMARY KEY,
-                    name text,
-                    completed_at timestamp,
-                    winner_id text
                 )");
 
             TryAddColumn("ALTER TABLE esports.inventory_by_user ADD purchase_price int");

@@ -24,14 +24,4 @@ public class InventoryController : ControllerBase
         // 3. Vrati rezultate
         return Ok(items);
     }
-
-    // Ovo će Član 3 (Game Logic) koristiti da proveri da li igrač poseduje skin pre početka meča
-    [HttpGet("has-item/{userId}/{itemId}")]
-    public async Task<IActionResult> HasItem(string userId, string itemId)
-    {
-        var exists = await _inventoryService.HasItemAsync(userId, itemId);
-
-        // Vraćamo jednostavan boolean odgovor
-        return Ok(new { HasItem = exists });
-    }
 }

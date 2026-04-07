@@ -55,34 +55,6 @@ namespace EsportApi.Services
             return await _tournamentsCollection.Find(_ => true).ToListAsync();
         }
 
-        public async Task<Tournament?> GetTournament(string id)
-        {
-            string cacheKey = $"tournament:{id}";
-
-            // 1. Proveri da li turnir već postoji u Redisu
-            var cachedTournament = await _redisDb.StringGetAsync(cacheKey);
-
-            if (!cachedTournament.IsNullOrEmpty)
-            {
-                // Ako postoji u Redisu, vraćamo ga odmah (Uštedeli smo upit ka Mongu!)
-                Console.WriteLine("Turnir ucitan iz REDIS KESA!");
-                return JsonSerializer.Deserialize<Tournament>(cachedTournament.ToString());
-            }
-
-            // 2. Ako nije u Redisu, čitamo ga iz MongoDB-a
-            var tournament = await _tournamentsCollection.Find(t => t.Id == id).FirstOrDefaultAsync();
-
-            if (tournament != null)
-            {
-                // 3. Upisujemo ga u Redis da bi sledeći put bio tu (čuvamo ga 5 minuta)
-                var json = JsonSerializer.Serialize(tournament);
-                await _redisDb.StringSetAsync(cacheKey, json, TimeSpan.FromMinutes(5));
-                Console.WriteLine("Turnir ucitan iz MONGO Baze i sacuvan u KES!");
-            }
-
-            return tournament;
-        }
-
         // --- MAGIJA TRANSAKCIJE POČINJE OVDE ---
         public async Task<bool> AdvanceWinner(string tournamentId, string matchId, string winnerId)
         {
@@ -146,11 +118,6 @@ namespace EsportApi.Services
 
                     // Sačuvaj status turnira u Mongo
                     await _tournamentsCollection.ReplaceOneAsync(session, tourFilter, tournament);
-
-                    // CASSANDRA: Arhiviranje turnira u istoriju
-                    var query = "INSERT INTO esports.tournament_history_by_id (tournament_id, name, completed_at, winner_id) VALUES (?, ?, toTimestamp(now()), ?)";
-                    var stmt = await _cassandra.PrepareAsync(query);
-                    await _cassandra.ExecuteAsync(stmt.Bind(tournament.Id, tournament.Name, winnerId));
 
                     await session.CommitTransactionAsync();
                     await _redisDb.KeyDeleteAsync($"tournament:{tournamentId}");
