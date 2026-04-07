@@ -31,6 +31,28 @@ namespace EsportApi.Controllers
             return Ok(game);
         }
 
+        [HttpGet("{matchId}/move")]
+        public async Task<IActionResult> GetMove(string matchId)
+        {
+            var game = await _gameService.GetMoveAsync(matchId);
+            if (game == null) return NotFound("Meč nije u memoriji.");
+            return Ok(game);
+        }
+
+        [HttpGet("history/{userId}")]
+        public async Task<IActionResult> GetMatchHistory(string userId)
+        {
+            var history = await _gameService.GetMatchHistoryAsync(userId);
+            return Ok(history);
+        }
+
+        [HttpGet("{matchId}/moves")]
+        public async Task<IActionResult> GetMatchMoves(string matchId)
+        {
+            var moves = await _gameService.GetMatchMovesAsync(matchId);
+            return Ok(moves);
+        }
+
         [HttpGet("{matchId}/chat")]
         public async Task<IActionResult> GetMatchChat(string matchId)
         {

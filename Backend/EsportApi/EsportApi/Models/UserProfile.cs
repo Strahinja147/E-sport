@@ -43,4 +43,5 @@ public class Friend
     public required string UserId { get; set; }
     public required string Username { get; set; }
     public string Status { get; set; } = "Pending"; // Može biti "Pending" ili "Accepted"
+    public string? RequestedByUserId { get; set; }
 }

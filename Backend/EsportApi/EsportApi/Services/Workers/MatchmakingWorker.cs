@@ -4,8 +4,6 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.SignalR;
-using EsportApi.Hubs; // Tvoj Hub
 using EsportApi.Services.Interfaces;
 
 namespace EsportApi.Services.Workers
@@ -36,9 +34,7 @@ namespace EsportApi.Services.Workers
                     {
                         // Izvlačimo Matchmaking servis
                         var matchService = scope.ServiceProvider.GetRequiredService<IMatchmakingService>();
-
-                        // Izvlačimo SignalR Hub da bismo javili frontendu
-                        var hubContext = scope.ServiceProvider.GetRequiredService<IHubContext<GameHub>>();
+                        var realtimePublisher = scope.ServiceProvider.GetRequiredService<IRedisRealtimePublisher>();
 
                         // Sistem SAM poziva funkciju
                         var match = await matchService.TryMatch();
@@ -48,9 +44,7 @@ namespace EsportApi.Services.Workers
                             // Uspesno upareni!
                             _logger.LogInformation($"[MATCHMAKING SUCCESS] Spojeni: {match.Player1} i {match.Player2} u meč: {match.MatchId}");
 
-                            // ODMAH ispaljujemo poruku na frontend preko SignalR-a!
-                            // Frontend React aplikacija će slušati event "MatchFound"
-                            await hubContext.Clients.All.SendAsync("MatchFound", match);
+                            await realtimePublisher.PublishMatchFoundAsync(match);
                         }
                     }
                 }
