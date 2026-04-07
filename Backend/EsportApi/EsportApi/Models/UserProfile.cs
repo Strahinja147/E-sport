@@ -13,6 +13,7 @@ public class UserProfile
 
     public string? CurrentTeamId { get; set; } 
     public List<Friend> Friends { get; set; } = new();
+    public List<TeamInvite> TeamInvites { get; set; } = new();
     /* 
        ZAŠTO: 
        1. Ugnježdeni Stats: Umesto da PlayerStatistics bude posebna kolekcija, 
@@ -44,4 +45,13 @@ public class Friend
     public required string Username { get; set; }
     public string Status { get; set; } = "Pending"; // Može biti "Pending" ili "Accepted"
     public string? RequestedByUserId { get; set; }
+}
+
+public class TeamInvite
+{
+    public required string TeamId { get; set; }
+    public required string TeamName { get; set; }
+    public required string RequestedByUserId { get; set; }
+    public required string RequestedByUsername { get; set; }
+    public DateTime RequestedAt { get; set; } = DateTime.UtcNow;
 }

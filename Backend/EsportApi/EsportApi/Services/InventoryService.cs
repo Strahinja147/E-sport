@@ -35,33 +35,6 @@ namespace EsportApi.Services
             return await EnrichInventoryAsync(inventory);
         }
 
-        public async Task<bool> HasItemAsync(string userId, string itemId)
-        {
-            var query = "SELECT item_id FROM esports.inventory_items_by_user WHERE user_id = ? AND item_id = ?";
-            var prepared = await _cassandraSession.PrepareAsync(query);
-            var resultSet = await _cassandraSession.ExecuteAsync(prepared.Bind(userId, itemId));
-
-            if (resultSet.FirstOrDefault() != null)
-            {
-                return true;
-            }
-
-            var inventory = await ReadInventoryAsync(
-                "SELECT item_id, item_name, purchased_at, purchase_price FROM esports.inventory_by_user WHERE user_id = ?",
-                userId,
-                hasPurchasePrice: true);
-
-            if (inventory.Count == 0)
-            {
-                inventory = await ReadInventoryAsync(
-                    "SELECT item_id, item_name, purchased_at FROM esports.inventory WHERE user_id = ?",
-                    userId,
-                    hasPurchasePrice: false);
-            }
-
-            return inventory.Any(item => item.ItemId == itemId);
-        }
-
         private async Task<List<InventoryItemDTO>> ReadInventoryAsync(string query, string userId, bool hasPurchasePrice)
         {
             var prepared = await _cassandraSession.PrepareAsync(query);

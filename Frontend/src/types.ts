@@ -25,6 +25,7 @@ export interface UserProfile {
   stats: PlayerStatistics
   currentTeamId?: string | null
   friends: Friend[]
+  teamInvites: TeamInvite[]
 }
 
 export interface LeaderboardEntry {
@@ -84,9 +85,26 @@ export interface Team {
   name: string
   ownerId: string
   memberIds: string[]
+  pendingInvites: TeamPendingInvite[]
   teamElo: number
   teamAchievements: string[]
   createdAt: string
+}
+
+export interface TeamInvite {
+  teamId: string
+  teamName: string
+  requestedByUserId: string
+  requestedByUsername: string
+  requestedAt: string
+}
+
+export interface TeamPendingInvite {
+  userId: string
+  username: string
+  requestedByUserId: string
+  requestedByUsername: string
+  requestedAt: string
 }
 
 export interface PlayerDto {

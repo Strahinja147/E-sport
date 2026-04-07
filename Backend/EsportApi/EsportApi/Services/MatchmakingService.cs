@@ -214,21 +214,6 @@ namespace EsportApi.Services
             return result;
         }
 
-        public async Task UpdateLeaderboardCache(string userId, int newElo)
-        {
-            await _redisDb.SortedSetAddAsync("leaderboard_elo", userId, newElo);
-        }
-
-        public async Task SyncLeaderboardAsync()
-        {
-            var allUsers = await _userCollection.Find(_ => true).ToListAsync();
-
-            foreach (var user in allUsers)
-            {
-                await _redisDb.SortedSetAddAsync("leaderboard_elo", user.Id, user.EloRating);
-            }
-        }
-
         public async Task<string> JoinTournamentQueueAsync(string userId)
         {
             var user = await _userCollection.Find(u => u.Id == userId).FirstOrDefaultAsync();

@@ -21,8 +21,6 @@ namespace EsportApi.Services.Interfaces
 
         // Leaderboard deo (Redis Sorted Sets + MongoDB)
         Task<List<LeaderboardEntry>> GetTopPlayers(int count);
-        Task UpdateLeaderboardCache(string userId, int newElo);
-        Task SyncLeaderboardAsync();
         Task<string> JoinTournamentQueueAsync(string userId);
         Task<List<string>?> CheckTournamentQueueAsync(int requiredPlayers);
     }

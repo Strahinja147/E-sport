@@ -326,10 +326,6 @@ namespace EsportApi.Services
                         }
                     }
 
-                    var endMatchQuery = "INSERT INTO esports.matches_history_by_match (match_id, played_at, result) VALUES (?, toTimestamp(now()), ?)";
-                    var stEnd = await _cassandra.PrepareAsync(endMatchQuery);
-                    await _cassandra.ExecuteAsync(stEnd.Bind(matchId, resultText));
-
                     await SaveMatchHistoryForPlayersAsync(
                         matchId,
                         now,

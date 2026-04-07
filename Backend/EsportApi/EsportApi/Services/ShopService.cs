@@ -239,18 +239,6 @@ namespace EsportApi.Services
             };
         }
 
-        public async Task<int> GetMonthlyRevenueAsync(string yearMonth)
-        {
-            var rows = await ReadPurchaseRowsAsync(yearMonth, "SELECT price FROM esports.purchase_logs_by_month WHERE year_month = ?");
-            return rows.Sum(r => r.GetValue<int>("price"));
-        }
-
-        public async Task AddCoinsAsync(string userId, int amount)
-        {
-            var users = _mongo.GetDatabase("EsportDb").GetCollection<UserProfile>("Users");
-            await users.UpdateOneAsync(u => u.Id == userId, Builders<UserProfile>.Update.Inc(u => u.Coins, amount));
-        }
-
         public async Task<List<ShopItem>> GetAllItemsAsync()
         {
             return await _mongo.GetDatabase("EsportDb").GetCollection<ShopItem>("ShopItems").Find(_ => true).ToListAsync();

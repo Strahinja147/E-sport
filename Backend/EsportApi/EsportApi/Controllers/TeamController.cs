@@ -43,6 +43,76 @@ namespace EsportApi.Controllers
             }
         }
 
+        [HttpPost("send-invite")]
+        public async Task<IActionResult> SendInvite(string teamId, string senderId, string userId)
+        {
+            try
+            {
+                var result = await _teamService.SendInvite(teamId, senderId, userId);
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(ex.Message);
+            }
+        }
+
+        [HttpPost("send-invite-by-username")]
+        public async Task<IActionResult> SendInviteByUsername(string teamId, string senderId, string username)
+        {
+            try
+            {
+                var result = await _teamService.SendInviteByUsername(teamId, senderId, username);
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(ex.Message);
+            }
+        }
+
+        [HttpPost("accept-invite")]
+        public async Task<IActionResult> AcceptInvite(string teamId, string userId)
+        {
+            try
+            {
+                var result = await _teamService.AcceptInvite(teamId, userId);
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(ex.Message);
+            }
+        }
+
+        [HttpPost("reject-invite")]
+        public async Task<IActionResult> RejectInvite(string teamId, string userId)
+        {
+            try
+            {
+                var result = await _teamService.RejectInvite(teamId, userId);
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(ex.Message);
+            }
+        }
+
+        [HttpPost("cancel-invite")]
+        public async Task<IActionResult> CancelInvite(string teamId, string senderId, string userId)
+        {
+            try
+            {
+                var result = await _teamService.CancelInvite(teamId, senderId, userId);
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(ex.Message);
+            }
+        }
+
         [HttpGet("{teamId}")]
         public async Task<IActionResult> GetTeam(string teamId)
         {

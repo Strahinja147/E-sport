@@ -6,6 +6,5 @@ namespace EsportApi.Services.Interfaces
     public interface IInventoryService
     {
         Task<List<InventoryItemDTO>> GetInventoryByUserIdAsync(string userId);
-        Task<bool> HasItemAsync(string userId, string itemId);
     }
 }

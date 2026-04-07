@@ -170,20 +170,6 @@ namespace EsportApi.Controllers
             return Ok(history);
         }
 
-        [HttpPost("send-friend-request")]
-        public async Task<IActionResult> SendRequest(string senderId, string receiverId)
-        {
-            try
-            {
-                var success = await _userService.SendFriendRequest(senderId, receiverId);
-                return success ? Ok("Zahtev za prijateljstvo uspesno poslat!") : BadRequest("Greska pri slanju zahteva.");
-            }
-            catch (Exception ex)
-            {
-                return BadRequest(ex.Message);
-            }
-        }
-
         [HttpPost("send-friend-request-by-username")]
         public async Task<IActionResult> SendRequestByUsername([FromBody] FriendLookupRequest request)
         {

@@ -113,7 +113,6 @@ function normalizeMessage(payload: unknown, fallback: string) {
 }
 
 export const api = {
-  getDatabaseStatus: () => request<string>('/DatabaseTest/test-all'),
   getUsers: () => request<UserProfile[]>('/api/User/all'),
   register: (username: string, email: string, password: string) =>
     request<UserProfile>('/api/User/register', {
@@ -136,12 +135,6 @@ export const api = {
     request<AuditLog[]>(`/api/User/audit-logs/${userId}`),
   getPlayerProgress: (userId: string) =>
     request<PlayerProgress[]>(`/api/User/progress/${userId}`),
-  sendFriendRequest: (senderId: string, receiverId: string) =>
-    request<string>(
-      '/api/User/send-friend-request',
-      { method: 'POST' },
-      { senderId, receiverId },
-    ),
   sendFriendRequestByUsername: (senderId: string, username: string) =>
     request<string>('/api/User/send-friend-request-by-username', {
       method: 'POST',
@@ -172,17 +165,10 @@ export const api = {
     request<string>('/Matchmaking/join', { method: 'POST' }, { userId }),
   checkMatchmaking: (userId?: string) =>
     request<MatchFound | { message: string }>('/Matchmaking/check-match', undefined, { userId }),
-  syncLeaderboard: () => request<string>('/Matchmaking/sync', { method: 'POST' }),
   joinTournamentQueue: async (userId: string) =>
     normalizeMessage(
       await request<unknown>('/Matchmaking/join-tournament', { method: 'POST' }, { userId }),
       'Uspesno prijavljen u turnirski red.',
-    ),
-  startGame: (p1: string, p2: string, matchId?: string, tournamentId?: string) =>
-    request<{ matchId: string }>(
-      '/Game/start',
-      { method: 'POST' },
-      { p1, p2, matchId, tournamentId },
     ),
   getGameState: (matchId: string) => request<TicTacToeGame>(`/Game/${matchId}`),
   getMove: (matchId: string) => request<TicTacToeGame>(`/Game/${matchId}/move`),
@@ -210,28 +196,26 @@ export const api = {
     request<{ message: string }>('/api/Shop/buy', { method: 'POST' }, { userId, itemId }),
   sellItem: (userId: string, itemId: string, purchasedAt: string) =>
     request<{ message: string }>('/api/Shop/sell', { method: 'DELETE' }, { userId, itemId, purchasedAt }),
-  addCoins: (userId: string, amount: number) =>
-    request('/api/Shop/add-coins', { method: 'POST' }, { userId, amount }),
-  seedLimitedItem: () => request<ShopItem>('/api/Shop/seed-limited-item', { method: 'POST' }),
   getRevenue: (yearMonth: string) =>
     request<RevenueReport>(`/api/Shop/revenue/${yearMonth}`),
   getInventory: (userId: string) =>
     request<InventoryItem[]>(`/Inventory/my-inventory/${userId}`),
-  createTournament: (name: string) =>
-    request<TournamentSummary>('/api/Tournament/create', { method: 'POST' }, { name }),
-  getTournament: (id: string) => request<TournamentSummary>(`/api/Tournament/${id}`),
   getTournaments: () => request<TournamentSummary[]>('/api/Tournament'),
   getTournamentDetails: (id: string) =>
     request<TournamentDetails>(`/api/Tournament/details/${id}`),
-  generateBracket: (tournamentId: string, playerIds: string[]) =>
-    request<string>(`/api/Tournament/generate-bracket/${tournamentId}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(playerIds),
-    }),
   createTeam: (name: string, ownerId: string) =>
     request<Team>('/api/Team/create', { method: 'POST' }, { name, ownerId }),
   addTeamMember: (teamId: string, userId: string) =>
     request<string>('/api/Team/add-member', { method: 'POST' }, { teamId, userId }),
+  sendTeamInvite: (teamId: string, senderId: string, userId: string) =>
+    request<string>('/api/Team/send-invite', { method: 'POST' }, { teamId, senderId, userId }),
+  sendTeamInviteByUsername: (teamId: string, senderId: string, username: string) =>
+    request<string>('/api/Team/send-invite-by-username', { method: 'POST' }, { teamId, senderId, username }),
+  acceptTeamInvite: (teamId: string, userId: string) =>
+    request<string>('/api/Team/accept-invite', { method: 'POST' }, { teamId, userId }),
+  rejectTeamInvite: (teamId: string, userId: string) =>
+    request<string>('/api/Team/reject-invite', { method: 'POST' }, { teamId, userId }),
+  cancelTeamInvite: (teamId: string, senderId: string, userId: string) =>
+    request<string>('/api/Team/cancel-invite', { method: 'POST' }, { teamId, senderId, userId }),
   getTeam: (teamId: string) => request<Team>(`/api/Team/${teamId}`),
 }
