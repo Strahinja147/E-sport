@@ -24,14 +24,6 @@ namespace EsportApi.Services
                 userId,
                 hasPurchasePrice: true);
 
-            if (inventory.Count == 0)
-            {
-                inventory = await ReadInventoryAsync(
-                    "SELECT item_id, item_name, purchased_at FROM esports.inventory WHERE user_id = ?",
-                    userId,
-                    hasPurchasePrice: false);
-            }
-
             return await EnrichInventoryAsync(inventory);
         }
 

@@ -10,6 +10,7 @@ namespace EsportApi.Services
     {
         private readonly IDatabase _redisDb;
         private readonly IMongoCollection<UserProfile> _userCollection;
+        private readonly IMongoCollection<Match> _matchesCollection;
         private readonly IGameService _gameService;
 
         public MatchmakingService(IConnectionMultiplexer redis, IMongoClient mongoClient, IGameService gameService)
@@ -17,6 +18,7 @@ namespace EsportApi.Services
             _redisDb = redis.GetDatabase();
             var mongoDb = mongoClient.GetDatabase("EsportDb");
             _userCollection = mongoDb.GetCollection<UserProfile>("Users");
+            _matchesCollection = mongoDb.GetCollection<Match>("Matches");
             _gameService = gameService;
         }
 
@@ -112,21 +114,21 @@ namespace EsportApi.Services
             var matchId = await _redisDb.StringGetAsync($"user_active_match:{userId}");
             if (matchId.IsNullOrEmpty)
             {
-                return null;
+                return await GetAssignedMatchFromMongoAsync(userId);
             }
 
             var gameState = await _redisDb.StringGetAsync($"match:{matchId}");
             if (gameState.IsNullOrEmpty)
             {
                 await _redisDb.KeyDeleteAsync($"user_active_match:{userId}");
-                return null;
+                return await GetAssignedMatchFromMongoAsync(userId);
             }
 
             var game = JsonSerializer.Deserialize<TicTacToeGame>(gameState!);
             if (game == null)
             {
                 await _redisDb.KeyDeleteAsync($"user_active_match:{userId}");
-                return null;
+                return await GetAssignedMatchFromMongoAsync(userId);
             }
 
             if (!string.Equals(game.Status, "InProgress", StringComparison.OrdinalIgnoreCase))
@@ -141,39 +143,22 @@ namespace EsportApi.Services
                     await _redisDb.KeyDeleteAsync($"user_active_match:{game.Player2Id}");
                 }
 
-                return null;
+                return await GetAssignedMatchFromMongoAsync(userId);
             }
 
             var playerEntries = await _redisDb.HashGetAllAsync($"match_players:{matchId}");
             if (playerEntries.Length == 0)
             {
-                await _redisDb.KeyDeleteAsync($"user_active_match:{userId}");
-                return null;
+                return await GetAssignedMatchFromMongoAsync(userId);
             }
 
             var playerMap = playerEntries.ToDictionary(entry => entry.Name.ToString(), entry => entry.Value.ToString());
             if (!playerMap.TryGetValue("P1", out var player1Id) || !playerMap.TryGetValue("P2", out var player2Id))
             {
-                return null;
+                return await GetAssignedMatchFromMongoAsync(userId);
             }
 
-            var users = await _userCollection.Find(u => u.Id == player1Id || u.Id == player2Id).ToListAsync();
-            var player1 = users.FirstOrDefault(u => u.Id == player1Id);
-            var player2 = users.FirstOrDefault(u => u.Id == player2Id);
-
-            if (player1 == null || player2 == null)
-            {
-                return null;
-            }
-
-            return new MatchFoundDto
-            {
-                MatchId = matchId.ToString(),
-                Player1 = player1.Username,
-                Player2 = player2.Username,
-                Player1Id = player1Id,
-                Player2Id = player2Id
-            };
+            return await BuildMatchDtoAsync(matchId.ToString(), player1Id, player2Id);
         }
 
         public async Task<List<LeaderboardEntry>> GetTopPlayers(int count = 10)
@@ -276,26 +261,100 @@ namespace EsportApi.Services
             await _redisDb.StringSetAsync($"user_active_match:{match.Player2Id}", match.MatchId, ttl);
         }
 
+        private async Task<MatchFoundDto?> GetAssignedMatchFromMongoAsync(string userId)
+        {
+            var activeMatch = await _matchesCollection
+                .Find(match =>
+                    match.Status == "InProgress" &&
+                    (match.Player1Id == userId || match.Player2Id == userId))
+                .SortByDescending(match => match.PlayedAt)
+                .FirstOrDefaultAsync();
+
+            if (activeMatch == null ||
+                string.IsNullOrWhiteSpace(activeMatch.Player1Id) ||
+                string.IsNullOrWhiteSpace(activeMatch.Player2Id) ||
+                activeMatch.Player2Id == "TBD")
+            {
+                return null;
+            }
+
+            await _gameService.GetGameStateAsync(activeMatch.Id);
+            await SaveAssignedMatchAsync(new MatchFoundDto
+            {
+                MatchId = activeMatch.Id,
+                Player1 = string.Empty,
+                Player2 = string.Empty,
+                Player1Id = activeMatch.Player1Id,
+                Player2Id = activeMatch.Player2Id
+            });
+
+            return await BuildMatchDtoAsync(activeMatch.Id, activeMatch.Player1Id, activeMatch.Player2Id);
+        }
+
+        private async Task<MatchFoundDto?> BuildMatchDtoAsync(string matchId, string player1Id, string player2Id)
+        {
+            var users = await _userCollection.Find(u => u.Id == player1Id || u.Id == player2Id).ToListAsync();
+            var player1 = users.FirstOrDefault(u => u.Id == player1Id);
+            var player2 = users.FirstOrDefault(u => u.Id == player2Id);
+
+            if (player1 == null || player2 == null)
+            {
+                return null;
+            }
+
+            return new MatchFoundDto
+            {
+                MatchId = matchId,
+                Player1 = player1.Username,
+                Player2 = player2.Username,
+                Player1Id = player1Id,
+                Player2Id = player2Id
+            };
+        }
+
         private async Task<bool> HasActiveMatchAsync(string userId)
         {
             var matchId = await _redisDb.StringGetAsync($"user_active_match:{userId}");
             if (matchId.IsNullOrEmpty)
             {
-                return false;
+                var mongoMatch = await _matchesCollection
+                    .Find(match =>
+                        match.Status == "InProgress" &&
+                        (match.Player1Id == userId || match.Player2Id == userId))
+                    .FirstOrDefaultAsync();
+
+                if (mongoMatch == null ||
+                    string.IsNullOrWhiteSpace(mongoMatch.Player1Id) ||
+                    string.IsNullOrWhiteSpace(mongoMatch.Player2Id) ||
+                    mongoMatch.Player2Id == "TBD")
+                {
+                    return false;
+                }
+
+                await _gameService.GetGameStateAsync(mongoMatch.Id);
+                await SaveAssignedMatchAsync(new MatchFoundDto
+                {
+                    MatchId = mongoMatch.Id,
+                    Player1 = string.Empty,
+                    Player2 = string.Empty,
+                    Player1Id = mongoMatch.Player1Id,
+                    Player2Id = mongoMatch.Player2Id
+                });
+                return true;
             }
 
             var gameState = await _redisDb.StringGetAsync($"match:{matchId}");
             if (gameState.IsNullOrEmpty)
             {
                 await _redisDb.KeyDeleteAsync($"user_active_match:{userId}");
-                return false;
+                return await HasActiveMatchAsync(userId);
             }
 
             var game = JsonSerializer.Deserialize<TicTacToeGame>(gameState!);
             if (game == null || !string.Equals(game.Status, "InProgress", StringComparison.OrdinalIgnoreCase))
             {
                 await _redisDb.KeyDeleteAsync($"user_active_match:{userId}");
-                return false;
+                return await HasActiveMatchAsync(userId);
             }
 
             return true;

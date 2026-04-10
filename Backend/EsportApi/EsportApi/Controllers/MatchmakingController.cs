@@ -36,12 +36,12 @@ namespace EsportApi.Controllers
                 var assignedMatch = await _matchService.GetAssignedMatchAsync(userId);
                 return assignedMatch != null
                     ? Ok(assignedMatch)
-                    : Ok(new { Message = "Still waiting for players..." });
+                    : Ok(new { message = "Still waiting for players..." });
             }
 
             var match = await _matchService.TryMatch();
 
-            return match != null ? Ok(match) : Ok(new { Message = "Still waiting for players..." });
+            return match != null ? Ok(match) : Ok(new { message = "Still waiting for players..." });
         }
 
         [HttpGet("leaderboard")]
@@ -57,9 +57,9 @@ namespace EsportApi.Controllers
             var result = await _matchService.JoinTournamentQueueAsync(userId);
 
             if (result.Contains("Nedovoljan") || result.Contains("ne postoji") || result.Contains("Vec si"))
-                return BadRequest(new { Message = result });
+                return BadRequest(new { message = result });
 
-            return Ok(new { Message = result });
+            return Ok(new { message = result });
         }
     }
 }
