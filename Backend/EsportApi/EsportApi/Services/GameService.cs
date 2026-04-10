@@ -422,19 +422,9 @@ namespace EsportApi.Services
         }
         public async Task<List<PlayerProgress>> GetPlayerProgressAsync(string userId)
         {
-            var progress = await ReadProgressHistoryAsync(
+            return await ReadProgressHistoryAsync(
                 "SELECT recorded_at, elo, coins, change_reason FROM esports.player_progress_history_by_user WHERE user_id = ?",
                 "recorded_at",
-                userId);
-
-            if (progress.Count > 0)
-            {
-                return progress;
-            }
-
-            return await ReadProgressHistoryAsync(
-                "SELECT timestamp, elo, coins, change_reason FROM esports.player_progress_history WHERE user_id = ?",
-                "timestamp",
                 userId);
         }
         public async Task SaveLeaderboardSnapshotAsync()

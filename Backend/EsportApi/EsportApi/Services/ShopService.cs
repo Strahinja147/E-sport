@@ -172,29 +172,16 @@ namespace EsportApi.Services
                 profile => profile.Id == userId,
                 Builders<UserProfile>.Update.Inc(profile => profile.Coins, resalePrice));
 
-            if (inventoryRow.Source == InventorySource.Current)
-            {
-                var deleteCurrent = await _cassandra.PrepareAsync(
-                    "DELETE FROM esports.inventory_by_user WHERE user_id = ? AND purchased_at = ? AND item_id = ?");
-                await _cassandra.ExecuteAsync(deleteCurrent.Bind(userId, normalizedPurchasedAt, itemId));
-            }
-            else
-            {
-                var deleteLegacy = await _cassandra.PrepareAsync(
-                    "DELETE FROM esports.inventory WHERE user_id = ? AND purchased_at = ? AND item_id = ?");
-                await _cassandra.ExecuteAsync(deleteLegacy.Bind(userId, normalizedPurchasedAt, itemId));
-            }
+            var deleteCurrent = await _cassandra.PrepareAsync(
+                "DELETE FROM esports.inventory_by_user WHERE user_id = ? AND purchased_at = ? AND item_id = ?");
+            await _cassandra.ExecuteAsync(deleteCurrent.Bind(userId, normalizedPurchasedAt, itemId));
 
             var hasMoreCurrent = await UserStillOwnsItemAsync(
                 "SELECT item_id FROM esports.inventory_by_user WHERE user_id = ?",
                 userId,
                 itemId);
-            var hasMoreLegacy = await UserStillOwnsItemAsync(
-                "SELECT item_id FROM esports.inventory WHERE user_id = ?",
-                userId,
-                itemId);
 
-            if (!hasMoreCurrent && !hasMoreLegacy)
+            if (!hasMoreCurrent)
             {
                 var deleteLookup = await _cassandra.PrepareAsync(
                     "DELETE FROM esports.inventory_items_by_user WHERE user_id = ? AND item_id = ?");
@@ -262,10 +249,7 @@ namespace EsportApi.Services
                 return true;
             }
 
-            var legacyQuery = "SELECT item_id FROM esports.inventory WHERE user_id = ?";
-            var legacyPrepared = await _cassandra.PrepareAsync(legacyQuery);
-            var legacyRows = await _cassandra.ExecuteAsync(legacyPrepared.Bind(userId));
-            return legacyRows.Any(row => row.GetValue<string>("item_id") == itemId);
+            return false;
         }
 
         private async Task<InventoryRow?> GetInventoryRowAsync(string userId, string itemId, DateTime purchasedAt)
@@ -280,27 +264,11 @@ namespace EsportApi.Services
                 return new InventoryRow
                 {
                     ItemName = currentRow.GetValue<string>("item_name"),
-                    PurchasePrice = currentRow.IsNull("purchase_price") ? 0 : currentRow.GetValue<int>("purchase_price"),
-                    Source = InventorySource.Current
+                    PurchasePrice = currentRow.IsNull("purchase_price") ? 0 : currentRow.GetValue<int>("purchase_price")
                 };
             }
 
-            var legacyPrepared = await _cassandra.PrepareAsync(
-                "SELECT item_name FROM esports.inventory WHERE user_id = ? AND purchased_at = ? AND item_id = ?");
-            var legacyRows = await _cassandra.ExecuteAsync(legacyPrepared.Bind(userId, purchasedAt, itemId));
-            var legacyRow = legacyRows.FirstOrDefault();
-
-            if (legacyRow == null)
-            {
-                return null;
-            }
-
-            return new InventoryRow
-            {
-                ItemName = legacyRow.GetValue<string>("item_name"),
-                PurchasePrice = 0,
-                Source = InventorySource.Legacy
-            };
+            return null;
         }
 
         private async Task<bool> UserStillOwnsItemAsync(string query, string userId, string itemId)
@@ -313,28 +281,13 @@ namespace EsportApi.Services
         private async Task<RowSet> ReadPurchaseRowsAsync(string yearMonth, string primaryQuery)
         {
             var prepared = await _cassandra.PrepareAsync(primaryQuery);
-            var rows = await _cassandra.ExecuteAsync(prepared.Bind(yearMonth));
-
-            if (rows.Any())
-            {
-                return rows;
-            }
-
-            var legacyPrepared = await _cassandra.PrepareAsync("SELECT item_name, price FROM esports.purchase_logs WHERE year_month = ?");
-            return await _cassandra.ExecuteAsync(legacyPrepared.Bind(yearMonth));
+            return await _cassandra.ExecuteAsync(prepared.Bind(yearMonth));
         }
 
         private sealed class InventoryRow
         {
             public required string ItemName { get; set; }
             public int PurchasePrice { get; set; }
-            public InventorySource Source { get; set; }
-        }
-
-        private enum InventorySource
-        {
-            Current,
-            Legacy
         }
     }
 }

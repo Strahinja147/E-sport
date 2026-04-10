@@ -238,15 +238,7 @@ namespace EsportApi.Controllers
             var query = "SELECT logged_at, ip_address, device FROM esports.login_history_by_user WHERE user_id = ?";
             var prepared = await _cassandra.PrepareAsync(query);
             var rows = await _cassandra.ExecuteAsync(prepared.Bind(userId));
-
-            if (rows.Any())
-            {
-                return (rows, "logged_at");
-            }
-
-            var legacyPrepared = await _cassandra.PrepareAsync(
-                "SELECT timestamp, ip_address, device FROM esports.login_history WHERE user_id = ?");
-            return (await _cassandra.ExecuteAsync(legacyPrepared.Bind(userId)), "timestamp");
+            return (rows, "logged_at");
         }
     }
 }
