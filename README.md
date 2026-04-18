@@ -122,6 +122,83 @@ Preporuceni redosled:
 4. `npm install`
 5. `npm run dev`
 
+## Demo podaci
+
+Pri pokretanju backend-a aplikacija automatski dodaje mali skup demo podataka ako oni ne postoje:
+
+- 4 demo korisnika
+- nekoliko prihvacenih prijateljstava
+- 1 demo tim i 1 aktivan timski poziv
+- shop artikle
+- pocetni inventar i kupovine
+- login istoriju
+- ELO progres kroz vreme
+- istoriju vise gotovih meceva sa potezima
+- inicijalni leaderboard
+
+### Demo nalozi
+
+Lozinka za sve demo naloge:
+
+```text
+Demo123!
+```
+
+Nalozi:
+
+- `paja@demo.local`
+- `luka@demo.local`
+- `strale@demo.local`
+- `mika@demo.local`
+
+## Kratki scenariji za testiranje
+
+### Osnovni pregled aplikacije
+
+1. Ulogovati se kao `paja@demo.local`
+2. Otvoriti `Dashboard`
+3. Proveriti leaderboard, ELO grafik, istoriju meceva i poslednje kupovine
+
+### Drustvo
+
+1. Ulogovati se kao `paja@demo.local`
+2. Otvoriti `Drustvo`
+3. Proveriti postojece prijatelje i online status
+4. Poslati novi zahtev za prijateljstvo nekom od preostalih demo naloga
+
+### Timovi
+
+1. Ulogovati se kao `paja@demo.local`
+2. Otvoriti `Timovi`
+3. Proveriti demo tim `Night Falcons`
+4. Poslati timski poziv prijatelju iz dropdown-a ili drugom igracu preko `username`
+
+### Shop i inventar
+
+1. Ulogovati se kao `paja@demo.local`
+2. Otvoriti `Shop & Inventory`
+3. Proveriti da korisnik vec ima nekoliko `coins`
+4. Kupiti novi predmet ili prodati postojeci skin
+
+### Obican matchmaking
+
+1. Pokrenuti frontend u dva browser prozora ili na dva porta
+2. Ulogovati se kao dva razlicita demo korisnika
+3. Otvoriti `Matchmaking`
+4. Uci u red sa oba korisnika
+5. Proveriti automatski redirect na mec
+
+### Turnir
+
+1. Pokrenuti 4 odvojena login-a sa demo nalozima
+2. `paja@demo.local`
+3. `luka@demo.local`
+4. `strale@demo.local`
+5. `mika@demo.local`
+6. Sa sva 4 korisnika otvoriti `Matchmaking`
+7. Kliknuti `Prijavi se za turnirski red`
+8. Proveriti automatsko formiranje turnira i redirect na meceve
+
 ## Korisne komande
 
 ### Zaustavljanje Docker servisa
