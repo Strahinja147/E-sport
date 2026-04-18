@@ -54,6 +54,7 @@ builder.Services.AddSingleton<Cassandra.ISession>(s => {
     return cluster.Connect();
 });
 builder.Services.AddSingleton<CassandraSchemaInitializer>();
+builder.Services.AddSingleton<DemoDataSeeder>();
 
 // Registracija tvojih servisa (Clan 2)
 builder.Services.AddScoped<IMatchmakingService, EsportApi.Services.MatchmakingService>();
@@ -78,6 +79,7 @@ builder.Services.AddHostedService<RedisRealtimeSubscriberWorker>();
 var app = builder.Build();
 
 await app.Services.GetRequiredService<CassandraSchemaInitializer>().InitializeAsync();
+await app.Services.GetRequiredService<DemoDataSeeder>().InitializeAsync();
 
 if (app.Environment.IsDevelopment())
 {
