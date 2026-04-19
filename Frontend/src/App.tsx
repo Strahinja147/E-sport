@@ -183,7 +183,6 @@ function AppContent() {
 
         handleAssignedMatch(result)
       } catch {
-        // Tih fallback, bez prekidanja rada aplikacije.
       }
     }
 
@@ -215,7 +214,6 @@ function AppContent() {
       try {
         await api.logout(currentUser.id)
       } catch {
-        // Lokalni logout treba da prodje i kada backend nije dostupan.
       }
     }
   }

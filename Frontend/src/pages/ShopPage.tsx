@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { SectionPanel } from '../components/SectionPanel'
 import { api } from '../lib/api'
+import { formatAppDateTime } from '../lib/datetime'
 import type { InventoryItem, RevenueReport, ShopItem, UserProfile } from '../types'
 
 interface ShopPageProps {
@@ -72,13 +73,13 @@ export function ShopPage({ user, onUserRefresh }: ShopPageProps) {
           {items.map((item) => (
             <article key={item.id} className="shop-card">
               <span className="shop-card__badge">
-                {item.isLimited ? 'Limited edition' : 'Standard item'}
+                {item.isLimited ? 'Ogranicena serija' : 'Standardni predmet'}
               </span>
               <h3>{item.name}</h3>
-              <p>{item.price} coins</p>
+              <p>{item.price} novcica</p>
               {item.isLimited ? (
                 <span className="muted">
-                  Stock: {item.currentStock}/{item.initialStock}
+                  Dostupno: {item.currentStock}/{item.initialStock}
                 </span>
               ) : null}
               <button className="button" onClick={() => buyItem(item.id)}>
@@ -96,11 +97,11 @@ export function ShopPage({ user, onUserRefresh }: ShopPageProps) {
               <article key={`${item.itemId}-${item.purchasedAt}`} className="list-item">
                 <div>
                   <strong>{item.itemName}</strong>
-                  <span>Kupljeno za {item.purchasePrice} coins</span>
-                  <span>Prodajna vrednost: {item.resalePrice} coins</span>
+                  <span>Kupljeno za {item.purchasePrice} novcica</span>
+                  <span>Prodajna vrednost: {item.resalePrice} novcica</span>
                 </div>
                 <div className="inventory-actions">
-                  <span>{new Date(item.purchasedAt).toLocaleString()}</span>
+                  <span>{formatAppDateTime(item.purchasedAt)}</span>
                   <button
                     className="button button--ghost"
                     onClick={() => void sellItem(item.itemId, item.purchasedAt)}

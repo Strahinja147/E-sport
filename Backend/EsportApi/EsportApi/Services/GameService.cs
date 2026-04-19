@@ -42,14 +42,13 @@ namespace EsportApi.Services
 
         public async Task<string> StartGameAsync(string player1Id, string player2Id, string? matchId = null, string? tournamentId = null)
         {
-            // Ako nam kolega prosledi turnirski matchId koristimo njega, inače pravimo novi
             var finalMatchId = matchId ?? Guid.NewGuid().ToString();
             var now = DateTime.UtcNow;
 
             var game = new TicTacToeGame
             {
                 Id = finalMatchId,
-                TournamentId = tournamentId, // Čuvamo turnirski ID u Redisu
+                TournamentId = tournamentId,
                 Board = "_________",
                 CurrentTurn = "X",
                 Status = "InProgress",
@@ -262,9 +261,8 @@ namespace EsportApi.Services
                     game = await GetGameStateAsync(matchId);
                 }
 
-                // --- FINESA 2: OPTIMISTIC CONCURRENCY (Atomska preciznost) ---
                 if (game.Version != clientVersion)
-                    return $"Greska: Verzija se ne poklapa (Conflict). Osvezi tabelu. Backend: {game.Version}, Tvoj: {clientVersion}";
+                    return $"Greska: Tabla je u medjuvremenu promenjena. Osvezi prikaz i pokusaj ponovo. Trenutna verzija: {game.Version}.";
 
                 var p1Id = await db.HashGetAsync($"match_players:{matchId}", "P1");
                 var p2Id = await db.HashGetAsync($"match_players:{matchId}", "P2");
@@ -282,7 +280,6 @@ namespace EsportApi.Services
                 if (game.CurrentTurn != expectedSymbol) return "Greska: Nije tvoj red.";
                 if (position < 0 || position > 8 || game.Board[position] != '_') return "Greska: Polje zauzeto.";
 
-                // --- FINESA 3: ANALITIKA BRZINE (Thinking Time) ---
                 var now = DateTime.UtcNow;
                 var lastMoveTicksStr = await db.HashGetAsync($"match_players:{matchId}", "LastMoveAt");
                 long durationMs = 0;
@@ -292,12 +289,10 @@ namespace EsportApi.Services
                     durationMs = (long)(now - lastMoveAt).TotalMilliseconds;
                 }
 
-                // Izvrsi potez
                 char[] boardChars = game.Board.ToCharArray();
                 boardChars[position] = symbol[0];
                 game.Board = new string(boardChars);
 
-                // CASSANDRA: Upis sa duration_ms
                 var insertMove = "INSERT INTO esports.moves_by_match (match_id, moved_at, move_id, player_id, position, symbol, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)";
                 var statement = await _cassandra.PrepareAsync(insertMove);
                 await _cassandra.ExecuteAsync(statement.Bind(matchId, now, Guid.NewGuid(), playerId, position, symbol, durationMs));
@@ -373,24 +368,19 @@ namespace EsportApi.Services
         {
             var users = _mongo.GetDatabase("EsportDb").GetCollection<UserProfile>("Users");
 
-            // 1. Dohvatamo trenutnog korisnika iz MongoDB-a
             var user = await users.Find(u => u.Id == userId).FirstOrDefaultAsync();
             if (user == null) return;
 
-            // 2. Računamo novo stanje statistike (Wins, Losses, Games)
             int newTotalGames = user.Stats.TotalGames + 1;
             int newWins = won ? user.Stats.Wins + 1 : user.Stats.Wins;
             int newLosses = won ? user.Stats.Losses : user.Stats.Losses + 1;
             double newWinRate = Math.Round((double)newWins / newTotalGames, 2);
 
-            // 3. Računamo novi ELO (Pobednik +25, Gubitnik -15)
             int eloChange = won ? 25 : -15;
             int newElo = user.EloRating + eloChange;
 
-            // 4. Računamo nove Koine (Pobednik dobija 200)
             int newCoins = won ? user.Coins + 200 : user.Coins;
 
-            // 5. MONGODB: Ažuriramo profil (Fizički upisujemo sve izračunate vrednosti)
             var update = Builders<UserProfile>.Update
                 .Set(u => u.Stats.TotalGames, newTotalGames)
                 .Set(u => u.Stats.Wins, newWins)
@@ -408,16 +398,12 @@ namespace EsportApi.Services
                 Console.WriteLine($"[TeamService] Osvezio sam ELO tima za klan {user.CurrentTeamId}");
             }
 
-            // 6. REDIS: Automatsko osvežavanje globalne rang liste (Sorted Set)
             var redisDb = _redis.GetDatabase();
             await redisDb.SortedSetAddAsync("leaderboard_elo", userId, newElo);
 
-            // 7. CASSANDRA: Beleženje istorije napretka (Time-Series za grafikone)
-            // Ovo je ključno za analizu napretka kroz godine
             var progressQuery = "INSERT INTO esports.player_progress_history_by_user (user_id, recorded_at, entry_id, elo, coins, change_reason) VALUES (?, toTimestamp(now()), ?, ?, ?, ?)";
             var preparedProgress = await _cassandra.PrepareAsync(progressQuery);
 
-            // Upisujemo u Cassandru trenutni presek stanja nakon ovog meča
             await _cassandra.ExecuteAsync(preparedProgress.Bind(userId, Guid.NewGuid(), newElo, newCoins, "Match Result"));
         }
         public async Task<List<PlayerProgress>> GetPlayerProgressAsync(string userId)
@@ -431,7 +417,6 @@ namespace EsportApi.Services
         {
             var db = _redis.GetDatabase();
 
-            // Vučemo top 10 igrača iz Redisa (Order.Descending da bi prvi bio najbolji)
             var topPlayers = await db.SortedSetRangeByRankWithScoresAsync("leaderboard_elo", 0, 9, Order.Descending);
 
             if (topPlayers.Length == 0)
@@ -439,13 +424,11 @@ namespace EsportApi.Services
                 topPlayers = await db.SortedSetRangeByRankWithScoresAsync("leaderboard", 0, 9, Order.Descending);
             }
 
-            // Pripremamo upit za Cassandru
             var query = "INSERT INTO esports.leaderboard_snapshots_by_date (snapshot_date, score, player_id) VALUES (toDate(now()), ?, ?)";
             var prepared = await _cassandra.PrepareAsync(query);
 
             foreach (var player in topPlayers)
             {
-                // Upisujemo u Cassandru (Score mora biti int, PlayerId je string)
                 await _cassandra.ExecuteAsync(prepared.Bind((int)player.Score, player.Element.ToString()));
             }
         }
@@ -453,21 +436,17 @@ namespace EsportApi.Services
         {
             var db = _redis.GetDatabase();
 
-            // 1. BEZBEDNOST: Proveravamo ko uopšte igra ovaj meč
             var p1Id = await db.HashGetAsync($"match_players:{matchId}", "P1");
             var p2Id = await db.HashGetAsync($"match_players:{matchId}", "P2");
 
-            // Ako meč ne postoji ili je igrač "uljez" -> odbijamo ga!
             if (p1Id.IsNullOrEmpty || p2Id.IsNullOrEmpty) return null;
             if (playerId != p1Id.ToString() && playerId != p2Id.ToString()) return null;
 
-            // 2. Ime vadimo direktno iz baze da igrač ne bi lažirao ime na frontendu
             var user = await _mongo.GetDatabase("EsportDb").GetCollection<UserProfile>("Users")
                                    .Find(u => u.Id == playerId).FirstOrDefaultAsync();
 
             string username = user != null ? user.Username : "Unknown";
 
-            // 3. Upisujemo u Redis (LPUSH + LTRIM)
             var chatKey = $"chat:{matchId}";
             var chatMessage = $"{username}: {message}";
 
@@ -484,10 +463,8 @@ namespace EsportApi.Services
         {
             var db = _redis.GetDatabase();
 
-            // Dohvatamo sve poruke iz liste (LRANGE 0 -1)
             var messages = await db.ListRangeAsync($"chat:{matchId}");
 
-            // Vraćamo ih kao listu stringova
             return messages.Select(m => m.ToString()).ToList();
         }
 

@@ -9,10 +9,10 @@ interface AppShellProps extends PropsWithChildren {
 }
 
 const navigation = [
-  { to: '/', label: 'Dashboard' },
-  { to: '/leaderboard', label: 'Leaderboard' },
-  { to: '/matchmaking', label: 'Matchmaking' },
-  { to: '/shop', label: 'Shop & Inventory' },
+  { to: '/', label: 'Pocetna' },
+  { to: '/leaderboard', label: 'Rang lista' },
+  { to: '/matchmaking', label: 'Uparivanje' },
+  { to: '/shop', label: 'Prodavnica i inventar' },
   { to: '/tournament', label: 'Turniri' },
   { to: '/teams', label: 'Timovi' },
   { to: '/social', label: 'Drustvo' },
@@ -24,7 +24,7 @@ export function AppShell({ user, notices, onLogout, children }: AppShellProps) {
     <div className="shell">
       <aside className="sidebar">
         <div className="brand-card">
-          <span className="brand-card__badge">E-sport control room</span>
+          <span className="brand-card__badge">Arena takmicenja</span>
           <h1>Pulse Arena</h1>
           <p>Pregled meceva, turnira, inventara, timova i aktivnosti igraca.</p>
         </div>
@@ -50,10 +50,10 @@ export function AppShell({ user, notices, onLogout, children }: AppShellProps) {
           </div>
           <div className="sidebar__user-meta">
             <span>ELO {user.eloRating}</span>
-            <span>{user.coins} coins</span>
+            <span>{user.coins} novcica</span>
           </div>
           <button className="button button--ghost" onClick={onLogout}>
-            Logout
+            Odjava
           </button>
         </div>
       </aside>

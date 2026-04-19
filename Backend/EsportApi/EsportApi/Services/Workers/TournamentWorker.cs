@@ -29,19 +29,15 @@ namespace EsportApi.Services.Workers
                     var tourService = scope.ServiceProvider.GetRequiredService<ITournamentService>();
                     var realtimePublisher = scope.ServiceProvider.GetRequiredService<IRedisRealtimePublisher>();
 
-                    // ZA TESTIRANJE: Tražimo 4 igrača (Polufinale -> Finale)
-                    // U realnosti bi ovde stajalo 8 ili 16
                     var readyPlayers = await matchService.CheckTournamentQueueAsync(4);
 
                     if (readyPlayers != null)
                     {
                         _logger.LogInformation($"[TOURNAMENT] Skupilo se 4 igrača! Pravim turnir...");
 
-                        // 1. Kreiramo turnir u MongoDB
                         var tournamentName = "Pro Kup " + DateTime.UtcNow.ToString("HH:mm");
                         var tournament = await tourService.CreateTournament(tournamentName);
 
-                        // 2. Generišemo žreb (Runda 1 kreće)
                         await tourService.GenerateBracket(tournament.Id, readyPlayers);
 
                         _logger.LogInformation($"[TOURNAMENT STARTED] ID: {tournament.Id}");
@@ -54,7 +50,7 @@ namespace EsportApi.Services.Workers
                     _logger.LogError($"[TOURNAMENT ERROR]: {ex.Message}");
                 }
 
-                await Task.Delay(4000, stoppingToken); // Proverava svake 4 sekunde
+                await Task.Delay(4000, stoppingToken);
             }
         }
     }

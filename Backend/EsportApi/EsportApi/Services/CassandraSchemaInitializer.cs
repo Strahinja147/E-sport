@@ -122,7 +122,6 @@ namespace EsportApi.Services
             }
             catch
             {
-                // Kolona je vec dodata ili lokalna instanca trenutno ne zahteva izmenu.
             }
         }
     }

@@ -6,7 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using EsportApi.Services.Interfaces;
 
-namespace EsportApi.Services.Workers // Ili EsportApi.Workers zavisno kako ste nazvali folder
+namespace EsportApi.Services.Workers
 {
     public class LeaderboardSnapshotWorker : BackgroundService
     {
@@ -23,7 +23,6 @@ namespace EsportApi.Services.Workers // Ili EsportApi.Workers zavisno kako ste n
         {
             _logger.LogInformation("=> Leaderboard Snapshot Worker je POKRENUT! (Čuva presek na svakih sat vremena)");
 
-            // Beskonačna petlja u pozadini
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
@@ -32,7 +31,6 @@ namespace EsportApi.Services.Workers // Ili EsportApi.Workers zavisno kako ste n
                     {
                         var gameService = scope.ServiceProvider.GetRequiredService<IGameService>();
 
-                        // Sistem SAM poziva tvoju metodu
                         await gameService.SaveLeaderboardSnapshotAsync();
 
                         _logger.LogInformation($"[{DateTime.UtcNow:HH:mm:ss}] [CASSANDRA] Leaderboard snapshot uspešno arhiviran!");
@@ -43,8 +41,6 @@ namespace EsportApi.Services.Workers // Ili EsportApi.Workers zavisno kako ste n
                     _logger.LogError($"Greška pri čuvanju snapshot-a: {ex.Message}");
                 }
 
-                // Čekamo 1 sat do sledećeg preseka
-                // (Za potrebe testiranja pre odbrane, promeni ovo na TimeSpan.FromMinutes(1))
                 await Task.Delay(TimeSpan.FromHours(24), stoppingToken);
             }
         }

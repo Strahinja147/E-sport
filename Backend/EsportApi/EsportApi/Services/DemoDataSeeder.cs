@@ -127,7 +127,7 @@ namespace EsportApi.Services
                 MemberIds = new List<string> { users["Paja"].Id, users["Luka"].Id },
                 PendingInvites = new List<TeamPendingInvite> { pendingInvite },
                 TeamElo = (users["Paja"].EloRating + users["Luka"].EloRating) / 2,
-                TeamAchievements = new List<string> { "Rookie Cup finalist", "Demo roster spreman" },
+                TeamAchievements = new List<string> { "Finalista pro kupa", "Postava spremna" },
                 CreatedAt = new DateTime(2026, 4, 1, 16, 0, 0, DateTimeKind.Utc)
             };
 

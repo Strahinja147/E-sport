@@ -20,7 +20,7 @@ namespace EsportApi.Controllers
             try
             {
                 await _matchService.AddToQueue(userId);
-                return Ok("Joined queue.");
+                return Ok("Uspesno si dodat u red za mec.");
             }
             catch (Exception ex)
             {
@@ -36,12 +36,12 @@ namespace EsportApi.Controllers
                 var assignedMatch = await _matchService.GetAssignedMatchAsync(userId);
                 return assignedMatch != null
                     ? Ok(assignedMatch)
-                    : Ok(new { message = "Still waiting for players..." });
+                    : Ok(new { message = "Ceka se protivnik." });
             }
 
             var match = await _matchService.TryMatch();
 
-            return match != null ? Ok(match) : Ok(new { message = "Still waiting for players..." });
+            return match != null ? Ok(match) : Ok(new { message = "Ceka se protivnik." });
         }
 
         [HttpGet("leaderboard")]

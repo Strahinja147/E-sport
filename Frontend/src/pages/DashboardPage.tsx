@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { MetricCard } from '../components/MetricCard'
 import { SectionPanel } from '../components/SectionPanel'
 import { api } from '../lib/api'
+import { formatAppDate, formatAppDateTime, formatAppTime } from '../lib/datetime'
 import type {
   InventoryItem,
   LeaderboardEntry,
@@ -122,10 +123,10 @@ export function DashboardPage({ user }: DashboardPageProps) {
           hint={`${user.stats.wins} pobeda / ${user.stats.losses} poraza`}
         />
         <MetricCard
-          label="Coins"
+          label="Novcici"
           value={String(user.coins)}
           tone="accent"
-          hint="Koristi ih za kupovinu skinova i limited item-a"
+          hint="Koristi ih za kupovinu skinova i drugih predmeta"
         />
         <MetricCard
           label="Online igraci"
@@ -141,7 +142,7 @@ export function DashboardPage({ user }: DashboardPageProps) {
         />
       </section>
 
-      <SectionPanel title="Top 5 leaderboard">
+      <SectionPanel title="Top 5 igraca">
         <div className="list-stack">
           {leaderboard.map((entry) => (
             <article key={entry.userId} className="list-item">
@@ -187,7 +188,7 @@ export function DashboardPage({ user }: DashboardPageProps) {
                     </span>
                   </div>
                   <span>{match.isTournament ? match.tournamentName ?? 'Turnirski mec' : 'Direktan mec'}</span>
-                  <span>{new Date(match.playedAt).toLocaleString()}</span>
+                  <span>{formatAppDateTime(match.playedAt)}</span>
                 </button>
               ))}
             </div>
@@ -202,7 +203,7 @@ export function DashboardPage({ user }: DashboardPageProps) {
                     </div>
                     <div className="match-replay-card__meta">
                       <span>Igrao si kao: {selectedMatch.symbol}</span>
-                      <span>{new Date(selectedMatch.playedAt).toLocaleString()}</span>
+                      <span>{formatAppDateTime(selectedMatch.playedAt)}</span>
                     </div>
                   </div>
 
@@ -227,9 +228,7 @@ export function DashboardPage({ user }: DashboardPageProps) {
                                 {move.moveNumber}. {move.playerName}
                               </strong>
                               <span>{describePosition(move.position)}</span>
-                              <span>
-                                Simbol {move.symbol} · {new Date(move.movedAt).toLocaleTimeString()}
-                              </span>
+                              <span>Simbol {move.symbol} · {formatAppTime(move.movedAt)}</span>
                             </article>
                           ))}
                         </div>
@@ -270,7 +269,7 @@ export function DashboardPage({ user }: DashboardPageProps) {
               inventory.slice(0, 4).map((item) => (
                 <div key={`${item.itemId}-${item.purchasedAt}`} className="inventory-preview">
                   <strong>{item.itemName}</strong>
-                  <span>{new Date(item.purchasedAt).toLocaleString()}</span>
+                  <span>{formatAppDateTime(item.purchasedAt)}</span>
                 </div>
               ))
             ) : (
@@ -318,7 +317,7 @@ function ProgressChart({ entries }: ProgressChartProps) {
     return {
       x,
       y,
-      label: new Date(entry.timestamp).toLocaleDateString(),
+      label: formatAppDate(entry.timestamp),
       elo: entry.elo,
     }
   })
