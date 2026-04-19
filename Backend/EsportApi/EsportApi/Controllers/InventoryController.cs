@@ -15,13 +15,8 @@ public class InventoryController : ControllerBase
     [HttpGet("my-inventory/{userId}")]
     public async Task<IActionResult> GetInventory(string userId)
     {
-        // 1. Pozovi servis
         var items = await _inventoryService.GetInventoryByUserIdAsync(userId);
-
-        // 2. Proveri da li je lista prazna ili null
         if (items == null) return NotFound("Inventar nije pronađen.");
-
-        // 3. Vrati rezultate
         return Ok(items);
     }
 }

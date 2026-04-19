@@ -10,7 +10,7 @@ interface MatchmakingPageProps {
 
 export function MatchmakingPage({ user }: MatchmakingPageProps) {
   const navigate = useNavigate()
-  const [status, setStatus] = useState('Spreman za matchmaking.')
+  const [status, setStatus] = useState('Spreman za uparivanje.')
   const [match, setMatch] = useState<MatchFound | null>(null)
 
   useEffect(() => {
@@ -51,7 +51,7 @@ export function MatchmakingPage({ user }: MatchmakingPageProps) {
   async function joinQueue() {
     try {
       const response = await api.joinMatchmaking(user.id)
-      setStatus(typeof response === 'string' ? response : 'Uspesno dodat u queue.')
+      setStatus(typeof response === 'string' ? response : 'Uspesno si dodat u red za mec.')
     } catch (caughtError) {
       setStatus(caughtError instanceof Error ? caughtError.message : 'Greska pri ulasku u red.')
     }
@@ -88,10 +88,10 @@ export function MatchmakingPage({ user }: MatchmakingPageProps) {
 
   return (
     <>
-      <SectionPanel title="Ranked matchmaking">
+      <SectionPanel title="Takmicarsko uparivanje">
         <div className="action-row">
           <button className="button" onClick={joinQueue}>
-            Udji u matchmaking red
+            Udji u red za mec
           </button>
           <button className="button button--accent" onClick={checkMatch}>
             Proveri da li je mec pronadjen
@@ -114,7 +114,7 @@ export function MatchmakingPage({ user }: MatchmakingPageProps) {
         ) : null}
       </SectionPanel>
 
-      <SectionPanel title="Kako radi matchmaking" eyebrow="Tok uparivanja">
+      <SectionPanel title="Kako radi uparivanje" eyebrow="Tok uparivanja">
         <div className="list-stack">
           <article className="list-item">
             <div>

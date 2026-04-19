@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { SectionPanel } from '../components/SectionPanel'
 import { api } from '../lib/api'
+import { formatAppDateTime, formatAppTime, isSameAppDay } from '../lib/datetime'
 import type { AuditLog, UserProfile } from '../types'
 
 interface SecurityPageProps {
@@ -136,24 +137,11 @@ function formatLocation(ip: string) {
 function formatAuditTime(value: string) {
   const date = new Date(value)
   const now = new Date()
-
-  const sameDay =
-    date.getDate() === now.getDate() &&
-    date.getMonth() === now.getMonth() &&
-    date.getFullYear() === now.getFullYear()
+  const sameDay = isSameAppDay(date, now)
 
   if (sameDay) {
-    return `Danas u ${date.toLocaleTimeString('sr-RS', {
-      hour: '2-digit',
-      minute: '2-digit',
-    })}`
+    return `Danas u ${formatAppTime(date)}`
   }
 
-  return date.toLocaleString('sr-RS', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return formatAppDateTime(date)
 }

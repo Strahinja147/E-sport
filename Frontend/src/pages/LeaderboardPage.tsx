@@ -18,13 +18,13 @@ export function LeaderboardPage() {
       setEntries(board)
       setFeedback('')
     } catch (caughtError) {
-      setFeedback(caughtError instanceof Error ? caughtError.message : 'Greška pri učitavanju.')
+      setFeedback(caughtError instanceof Error ? caughtError.message : 'Greska pri ucitavanju.')
     }
   }
 
   return (
     <SectionPanel
-      title="Globalni leaderboard"
+      title="Globalna rang lista"
       actions={
         <div className="toolbar-inline">
           <input
@@ -35,10 +35,10 @@ export function LeaderboardPage() {
             onChange={(event) => setCount(Number(event.target.value))}
           />
           <button className="button" onClick={() => loadLeaderboard()}>
-            Osveži
+            Osvezi
           </button>
           <button className="button button--ghost" onClick={() => void api.snapshotLeaderboard()}>
-            Snapshootuj leaderboard
+            Sacuvaj presek rang liste
           </button>
         </div>
       }
@@ -49,8 +49,8 @@ export function LeaderboardPage() {
         <table className="data-table">
           <thead>
             <tr>
-              <th>Rank</th>
-              <th>Igrač</th>
+              <th>Pozicija</th>
+              <th>Igrac</th>
               <th>ELO</th>
               <th>Pobede</th>
               <th>Turnirske pobede</th>

@@ -181,7 +181,6 @@ export function GamePage({ user, onUserRefresh }: GamePageProps) {
           navigate(`/game?matchId=${result.matchId}`, { replace: true })
         }
       } catch {
-        // Ne prekidamo prikaz ako provera povremeno omane.
       }
     }
 
@@ -248,7 +247,6 @@ export function GamePage({ user, onUserRefresh }: GamePageProps) {
         await syncDirectOpponent(latestGame)
       }
     } catch {
-      // Tihi fallback polling, ne menjamo status ako samo povremeno omane.
     }
   }
 
@@ -359,7 +357,7 @@ export function GamePage({ user, onUserRefresh }: GamePageProps) {
               <h3>Status</h3>
               <span>Na potezu: {game?.currentTurn ?? '-'}</span>
               <span>Tvoj simbol: {mySymbol ?? '-'}</span>
-              <span>Verzija: {game?.version ?? '-'}</span>
+              <span>Potez: {game?.version ?? '-'}</span>
               <span>Stanje: {game?.status ?? '-'}</span>
             </div>
 

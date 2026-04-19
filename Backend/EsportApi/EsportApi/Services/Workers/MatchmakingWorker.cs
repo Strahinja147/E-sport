@@ -13,7 +13,6 @@ namespace EsportApi.Services.Workers
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly ILogger<MatchmakingWorker> _logger;
 
-        // Ubacujemo tvoj ScopeFactory i Logger
         public MatchmakingWorker(IServiceScopeFactory scopeFactory, ILogger<MatchmakingWorker> logger)
         {
             _scopeFactory = scopeFactory;
@@ -24,24 +23,19 @@ namespace EsportApi.Services.Workers
         {
             _logger.LogInformation("=> Matchmaking Background Worker je POKRENUT!");
 
-            // Beskonačna petlja koja radi dokle god je upaljen server
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
                 {
-                    // Tvoj genijalni Scope pristup
                     using (var scope = _scopeFactory.CreateScope())
                     {
-                        // Izvlačimo Matchmaking servis
                         var matchService = scope.ServiceProvider.GetRequiredService<IMatchmakingService>();
                         var realtimePublisher = scope.ServiceProvider.GetRequiredService<IRedisRealtimePublisher>();
 
-                        // Sistem SAM poziva funkciju
                         var match = await matchService.TryMatch();
 
                         if (match != null)
                         {
-                            // Uspesno upareni!
                             _logger.LogInformation($"[MATCHMAKING SUCCESS] Spojeni: {match.Player1} i {match.Player2} u meč: {match.MatchId}");
 
                             await realtimePublisher.PublishMatchFoundAsync(match);
@@ -53,7 +47,6 @@ namespace EsportApi.Services.Workers
                     _logger.LogError($"[MATCHMAKING ERROR] {ex.Message}");
                 }
 
-                // Tvojih 3 sekunde (odličan tajming za Redis)
                 await Task.Delay(3000, stoppingToken);
             }
         }
